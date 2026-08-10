@@ -1,0 +1,76 @@
+name: Research result
+description: Share a reproducible result without claiming that model judgment is proof.
+title: "[Research]: "
+labels: ["research-result"]
+body:
+  - type: markdown
+    attributes:
+      value: "An acceptable report needs reproducible evidence. Do not submit only ‘AI says proved’."
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement and assumptions
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Agent version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: provider_model
+    attributes:
+      label: Provider and model
+      description: Never include a credential.
+  - type: textarea
+    id: configuration
+    attributes:
+      label: Research configuration
+      description: Include budgets, bounds, precision, seed, assumptions, and relevant tool versions.
+    validations:
+      required: true
+  - type: dropdown
+    id: result_type
+    attributes:
+      label: Result type
+      options:
+        - Unverified candidate
+        - LLM assessed only
+        - Numerically supported
+        - Computationally verified
+        - Symbolically verified
+        - Exactly verified counterexample
+        - Formally verified external artifact
+    validations:
+      required: true
+  - type: textarea
+    id: witness
+    attributes:
+      label: Witness or proof artifact
+      description: Provide exact synthetic/public data or a safe link; do not paste private research without permission.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification method
+      description: State tool/version, scope, assumptions, and remaining uncertainty.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+    validations:
+      required: true
+  - type: checkboxes
+    id: attestation
+    attributes:
+      label: Attestation
+      options:
+        - label: I am not presenting an LLM judgment or bounded survival test as a proof.
+          required: true
+        - label: I reviewed the report for credentials, personal data, and unlicensed third-party content.
+          required: true

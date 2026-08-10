@@ -1,0 +1,29 @@
+{
+  "schema": "math-research-agent-public-example/v1",
+  "project": {
+    "name": "Fifth-power divisibility by 30",
+    "question": "For every integer n, n^5 - n is divisible by 30.",
+    "goal": "Explore a reproducible proof using divisibility by 2, 3, and 5.",
+    "background": "Synthetic public example; contains no user research data.",
+    "knownResults": "Fermat's little theorem may be used only after its assumptions are stated.",
+    "constraints": "Do not treat finite testing as proof.",
+    "mode": "autonomous",
+    "variables": "n",
+    "domain": "Integers",
+    "assumptions": "n is an integer"
+  },
+  "suggestedExperiment": {
+    "code": "result = all((n**5 - n) % 30 == 0 for n in range(-100, 101))",
+    "range": "-100 <= n <= 100",
+    "evidenceLevel": "computationally-verified",
+    "boundary": "This bounded check supports debugging but does not prove the universal statement."
+  },
+  "proofOutlineForReview": [
+    "n^5 - n is divisible by 2 because n^5 and n have the same parity.",
+    "n^5 - n is divisible by 3 by considering n modulo 3.",
+    "n^5 - n is divisible by 5 by Fermat's little theorem, including the case 5 divides n.",
+    "Because 2, 3, and 5 are pairwise coprime, divisibility by all three implies divisibility by 30."
+  ],
+  "claimedFinalLevel": "unverified",
+  "note": "The outline is a candidate argument until each step and dependency is independently justified."
+}

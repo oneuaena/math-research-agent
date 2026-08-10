@@ -1,0 +1,2 @@
+# Optional source-development SMT adapter. Windows release builds use requirements-bundled.txt.
+z3-solver>=4.13

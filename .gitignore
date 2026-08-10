@@ -1,0 +1,66 @@
+# JavaScript / Electron build output
+node_modules/
+node_modules.corrupt/
+dist/
+dist-electron/
+release/
+out/
+coverage/
+test-results/
+playwright-report/
+.vite/
+*.log
+*.log.*
+*.map
+
+# Environment and credentials
+.env
+.env.*
+!.env.example
+credentials/
+credential*
+*safeStorage*
+*safe-storage*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# Local application and research data
+.test-user-data/
+user-data/
+local-data/
+local-research-data/
+research-data/
+checkpoints/
+tool-workspaces/
+runtime-workspaces/
+experiment-output/
+experiment-outputs/
+temporary-experiments/
+runtime/python/
+runtime/cache/
+*.sqlite
+*.sqlite3
+*.db
+*.db-shm
+*.db-wal
+*.dmp
+*.crash
+
+# IDE and editor-local settings
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+*.swp
+*.swo
+*~
+
+# Operating-system metadata
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,35 @@
+name: Feature request
+description: Propose a focused improvement and its mathematical research use case.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What limitation or user problem should be addressed?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed feature
+      description: Describe behavior and evidence/safety boundaries, not only UI appearance.
+    validations:
+      required: true
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Mathematical research use case
+      description: Use synthetic or public information only.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+  - type: textarea
+    id: verification
+    attributes:
+      label: Verification and security impact
+      description: Explain evidence levels, tool permissions, provider data, or migration impact.

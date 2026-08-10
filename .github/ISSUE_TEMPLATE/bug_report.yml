@@ -1,0 +1,70 @@
+name: Bug report
+description: Report a reproducible application defect using sanitized data.
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: "Do not include API keys, Authorization headers, private research, databases, or unreviewed raw logs."
+  - type: input
+    id: os
+    attributes:
+      label: Windows version
+      placeholder: "Windows 11 24H2 x64"
+    validations:
+      required: true
+  - type: input
+    id: app_version
+    attributes:
+      label: App version
+      placeholder: "1.0.0"
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      description: Use a general name; never include a key or private endpoint credential.
+      placeholder: "Local coordinator or OpenAI-compatible provider"
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: "Model identifier, if relevant"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Reproduction steps
+      placeholder: "1. ...\n2. ...\n3. ..."
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized diagnostics or logs
+      description: Remove keys, tokens, private paths, personal data, and confidential model/research content before posting.
+      render: shell
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots
+      description: Remove API keys, private research, filenames, and personal data.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I reviewed this report and all attachments for credentials and private data.
+          required: true

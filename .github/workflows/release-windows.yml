@@ -1,0 +1,36 @@
+name: Build self-contained Windows installer
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  installer:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/cache@v4
+        with:
+          path: runtime/cache
+          key: mra-python-runtime-${{ hashFiles('python/requirements-bundled.txt', 'scripts/prepare-python-runtime.mjs') }}
+      - run: npm ci
+      - run: npm run runtime:prepare
+      - run: npm run test:bundled-python
+      - run: npm run dist
+      - run: npm run test:packaged
+      - run: npm run test:packaged-runtime
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Math-Research-Agent-Windows-x64
+          path: release/Math-Research-Agent-Setup-*.exe
+          if-no-files-found: error

@@ -1,0 +1,5 @@
+# Pinned Windows x64 release runtime. Keep in sync with runtime/README.md.
+sympy==1.14.0
+numpy==2.4.6
+scipy==1.17.1
+z3-solver==4.15.4.0
