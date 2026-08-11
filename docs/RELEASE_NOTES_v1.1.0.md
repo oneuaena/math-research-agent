@@ -22,8 +22,8 @@ This release strengthens long-running research continuity, document grounding, a
 - Platform: Windows 10/11 x64
 - Bundled runtime: CPython 3.12.10, SymPy, NumPy, SciPy, and Z3
 - External optional runtime: Lean 4/Lake (tested with Lean 4.32.0)
-- SHA-256: `16176D1E9FB42BBD12BAC6E6532C20C76192199B672A1C10307031BE92978FB8`
-- Size: `184,115,302 bytes` (about 175.59 MiB)
+- SHA-256: `7C8479FC7886EC1959FF75320AB647EE60FD332FD39243F0669A28FC7CFC3E05`
+- Size: `184,115,290 bytes` (about 175.59 MiB)
 
 The installer is not commercially code-signed, so Windows may display an Unknown publisher warning. Verify the checksum and obtain the installer only from the project release location.
 
