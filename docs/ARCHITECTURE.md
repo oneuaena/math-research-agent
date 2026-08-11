@@ -6,7 +6,7 @@ Math Research Agent is an Electron application with three execution boundaries:
 
 1. **Renderer** — React/TypeScript UI and Zustand state. It has no Node integration and cannot directly access files, SQLite, credentials, or child processes.
 2. **Electron main process** — owns BrowserWindow creation, IPC handlers, SQLite, imports/exports, credentials, provider requests, orchestration, and tool processes.
-3. **Python worker** — a JSON-in/JSON-out mathematical process launched with `python -I` in a per-project workspace.
+3. **Tool processes** — an isolated JSON-protocol Python worker plus audited external Z3 and Lean 4/Lake executions in per-project workspaces.
 
 `electron/preload.ts` exposes a narrow typed API through `contextBridge`. Renderer popups are denied, context isolation and sandboxing are enabled, and production devtools are disabled.
 
@@ -35,19 +35,23 @@ Development uses the Python executable configured in Settings. Packaged Windows 
 process.resourcesPath/runtime/python/python.exe
 ```
 
-Electron Builder places this runtime and `python/worker.py` outside `app.asar`. The worker validates a fixed tool enum and input schema, restricts imports/builtins/AST attributes, limits code size, uses a dedicated workspace, and is killed at the configured timeout.
+Electron Builder places this runtime and `python/worker.py` outside `app.asar`. The worker runs as `python -I -B -X utf8`, validates a fixed tool enum and input schema, captures program stdout/stderr separately from its JSON protocol, restricts imports/builtins/AST attributes, limits code and output size, uses a dedicated workspace, and is killed at the configured timeout.
 
-The bundled v1.0.0 runtime contains CPython 3.12.10, SymPy, NumPy, SciPy, mpmath, and z3-solver. Lean and SageMath are capability-detected external executables only.
+The bundled v1.1.0 runtime contains CPython 3.12.10, SymPy, NumPy, SciPy, mpmath, and z3-solver. Z3 reports only the status of the submitted bounded SMT-LIB encoding. Lean 4/Lake is an external, real proof adapter: each request is policy-checked, written to an exact `.lean` artifact, and accepted only when the Lean kernel exits successfully. `sorry`, `admit`, new axioms/constants, unsafe/native shortcuts, metaprogramming, IO, and foreign execution are rejected. SageMath remains capability-detected only.
+
+Every tool invocation writes a redacted JSONL audit entry and exact input/stdout/stderr/result artifacts under the Electron user-data `verification-artifacts` and `logs` directories. A shared spawn layer enforces no-shell execution, cancellation, timeout, and output limits.
 
 ## Research graph and verification
 
 Research nodes represent conjectures, subgoals, lemmas, claims, experiments, counterexamples, proof attempts, gaps, and dead ends. Edges record dependencies and support/refutation relationships. Evidence records retain type, verification label, reproducibility, sources, and experiments.
 
-Model-created nodes begin as `llm-assessed-only`. A proof cannot be displayed as verified unless all critical steps are valid, independently reviewed, and backed by exact or symbolic verification. Detailed semantics are in [VERIFICATION.md](VERIFICATION.md).
+Model-created nodes begin as `llm-assessed-only`. Exact, symbolic, and bounded Z3 results retain their narrower scope. A proof is promoted to `formally-verified` only when a real successful `lean_check` identifies the proof, names a `formalizationOf` target that exactly matches its theorem, the proof was independently reviewed, and every critical step is `VALID`. Detailed semantics are in [VERIFICATION.md](VERIFICATION.md).
 
 ## Literature and imports
 
-The import dialog accepts PDF, text, Markdown, and LaTeX files up to 50 MiB and copies them into local user data. Text formats store a bounded excerpt; PDFs are stored without OCR. Provider context contains bounded source excerpts, not arbitrary full files.
+The import dialog accepts PDF, DOCX, text, Markdown, and LaTeX files up to 50 MiB and copies them into local user data. A main-process extractor obtains page-aware PDF text, DOCX paragraphs, or plain text, then a deterministic index stores bounded chunks. Research context and project chat retrieve only bounded excerpts. Image-only PDFs are not OCRed, and original binary files are not sent to a provider. Optional literature search queries public arXiv and Crossref metadata endpoints and imports only records selected by the user.
+
+Project chat is routed through a separate context builder. Ordinary questions do not mutate the research state. Explicit research-control messages can update the problem statement or request run/pause/resume actions through typed main-process IPC; the existing orchestrator and checkpoint cursor remain authoritative.
 
 ## Security boundaries
 

@@ -13,7 +13,7 @@ Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组�
 Windows 10/11 x64 普通用户：
 
 1. 打开 [Gitee Releases 页面](https://gitee.com/lu-chuanyou/math-research-agent/releases)。
-2. 下载 `Math-Research-Agent-Setup-1.0.0.exe`。
+2. 下载 `Math-Research-Agent-Setup-1.1.0.exe`。
 3. 双击安装并打开 Math Research Agent。
 4. 打开“设置”，填写你自己的模型 Provider、Base URL、模型和 API Key。
 5. 运行“运行环境检查”，然后开始研究项目。
@@ -29,7 +29,8 @@ Windows 10/11 x64 普通用户：
 - 把自然语言问题转换为经过 schema 校验的结构化规格；
 - 使用不同研究角色运行有界、持久化的自主研究流程；
 - 维护研究分支、证据、失败路线、证明步骤和证明图；
-- 执行受限 Python、SymPy、NumPy、SciPy 和可选 Z3 检查；
+- 执行受限 Python、SymPy、NumPy、SciPy、有界 Z3 检查和真实 Lean 4 内核检查；
+- 对 PDF、DOCX、文本、Markdown、LaTeX 文档提取并索引文本，供有界研究上下文和来源感知对话使用；
 - 在提升任何验证标签之前批判候选论证；
 - 暂停、创建 checkpoint、恢复中断会话，并从已保存的下一阶段继续；
 - 使用确定性的本地协调器或 OpenAI-compatible 模型 Provider；
@@ -47,7 +48,7 @@ Windows 10/11 x64 普通用户：
 | `COMPUTATIONALLY VERIFIED` | 有记录的机器计算检查了一个有界命题或工件。 |
 | `SYMBOLICALLY VERIFIED` | 符号系统检查了指定变换或恒等式。 |
 | `EXACTLY VERIFIED` | 精确算术或可复跑的精确见证检查了所述命题。 |
-| `FORMALLY VERIFIED` | 外部证明助理接受了忠实形式化；当前应用不会自动产生这一等级。 |
+| `FORMALLY VERIFIED` | Lean 内核接受了所提交定理，并且应用把它关联到目标完全匹配且经过独立审查的证明。 |
 | `LLM ASSESSED ONLY` | 只有模型判断，没有独立机器或形式化证据。 |
 
 只要关键步骤无效、未解决、需要缺失引理，或缺少必要计算/形式化，候选证明就仍是不确定的。详见[数学验证规范](docs/VERIFICATION.md)。
@@ -59,6 +60,9 @@ Windows 10/11 x64 普通用户：
 - 可配置迭代次数、总时长、分支数、工具超时、Provider 超时和 checkpoint 间隔。
 - 类型化研究节点、图边、证据记录、证明文档和逐步审查状态。
 - 使用内置合成示例进行可复现、精确的反例压力测试。
+- 项目研究对话支持明确的研究控制路由，并从已导入文档检索有界上下文。
+- 本地文档提取与分块索引，以及可选的 arXiv/Crossref 文献检索。
+- Python、SymPy、Z3、Lean 工具运行保留精确输入、分离的输出/错误、超时和严格证据等级审计。
 - OpenAI-compatible `/chat/completions` 传输层，支持有限重试、SSE 归一化、工具调用、reasoning 字段兼容和结构化 JSON 恢复。
 - 本地导出 Markdown/LaTeX 报告和 JSON 反例证据。
 - 启动时把中断任务恢复为可继续的暂停 checkpoint。
@@ -74,7 +78,8 @@ Electron 主进程
         ├── SQLite 项目与 checkpoint 存储
         ├── 研究编排器与 Provider 适配层
         ├── safeStorage 凭据封装
-        └── 隔离 Python worker → SymPy / NumPy / SciPy / 可选 Z3
+        ├── 隔离 Python worker → SymPy / NumPy / SciPy / Z3
+        └── 可审计 Lean 4 / Lake 适配器 → 内核接受
 ```
 
 渲染进程启用 context isolation、关闭 Node integration、开启 Electron sandbox、拒绝新窗口，并只暴露窄化 preload bridge。详见[架构文档](docs/ARCHITECTURE.md)。
@@ -90,7 +95,7 @@ Electron 主进程
 - npm（随 Node.js 提供）
 - 可通过 `python` 调用的 Python 3.12 或更高版本
 - 开发与测试所需的 `python/requirements.txt` Python 包
-- 可选外部工具：Lean 和 SageMath 当前只进行能力检测
+- 可选安装外部 Lean 4/Lake，用于内核检查的形式验证；SageMath 仍只进行能力检测
 
 ## 开发者快速开始
 
@@ -131,7 +136,7 @@ Windows PowerShell 可能拦截 `npm.ps1`，因此示例使用 `npm.cmd`。这�
 
 ## 工具执行边界
 
-Python worker 使用 `python -I`、独立项目工作目录、JSON 输入输出、输入 schema、AST 白名单、受限内置函数/导入和可配置超时。它只提供数学操作，不提供任意 shell 执行能力。
+Python worker 使用 `python -I -B -X utf8`、独立项目工作目录、单一 JSON 协议通道、分离捕获的程序 stdout/stderr、输入 schema、AST 白名单、受限内置函数/导入、输出限制和可配置超时。Z3 只针对提交的有界编码报告 `SAT`、`UNSAT` 或 `UNKNOWN`。Lean 适配器调用真实 Lake/Lean，并把精确源文件与内核输出保存在本地审计工件中。
 
 **这是纵深防御，不是完美的操作系统级沙箱。** Python 和原生科学计算包非常复杂。如果进程级突破不可接受，请不要在该机器上执行不可信的模型代码。详见[安全策略](SECURITY.md)。
 
@@ -140,7 +145,7 @@ Python worker 使用 `python -I`、独立项目工作目录、JSON 输入输出�
 - 项目、设置、checkpoint、证据、证明尝试和研究历史默认保存在 Electron 用户数据目录；Windows 当前路径为 `%APPDATA%\math-research-agent\research.sqlite3`。
 - Windows 安全存储可用时，Provider 凭据通过 Electron `safeStorage` 加密，加密值保存在本地数据库。
 - Provider 调用会发送项目问题、目标、背景、已知结果、约束、当前规格、近期步骤、证明/证据上下文和选定来源摘录。
-- 导入文件会复制到本地用户数据目录。文本、Markdown、LaTeX 摘录可能进入 Provider 上下文；PDF 二进制不会自动上传，本版本也不执行 PDF OCR。
+- 导入的 PDF、DOCX、文本、Markdown、LaTeX 会复制到本地用户数据目录，并进行文本提取和分块索引。只有有界检索摘录可能进入 Provider 上下文；原始 PDF/DOCX 二进制不会上传，纯图片 PDF 不执行 OCR。
 - 轮转 Provider debug log 会保存状态、schema 信息和已脱敏的模型响应内容。即使凭据模式会被过滤，日志仍可能包含敏感研究文本。
 
 处理机密研究或第三方文档前，请阅读[隐私文档](docs/PRIVACY.md)。
@@ -169,6 +174,7 @@ npm.cmd run dist
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd test
+npm.cmd run test:formal-tools
 npm.cmd run build
 npm.cmd run test:e2e
 ```
@@ -177,6 +183,7 @@ npm.cmd run test:e2e
 
 ```powershell
 npm.cmd run test:packaged
+npm.cmd run test:packaged-runtime
 ```
 
 Provider E2E 使用本地 mock HTTP server。真实付费 Provider 测试不会进入公开 CI。
@@ -184,9 +191,8 @@ Provider E2E 使用本地 mock HTTP server。真实付费 Provider 测试不会�
 ## 当前限制
 
 - 源码开发使用开发者配置的 Python；Windows installer 内置 CPython 3.12.10、SymPy、NumPy、SciPy 和 Z3。
-- Lean 和 SageMath 只检测存在性，尚未作为完整证明适配器调用。
-- 导入 PDF 只本地保存，不含 OCR 或语义索引。
-- 来源摘录是有界文本切片，不是达到引用审计级别的检索系统。
+- Lean 4/Lake 已是实际外部证明适配器，但不随安装包捆绑；需要形式检查的用户须自行安装或配置路径。SageMath 仍为可选能力检测。
+- 导入文档采用本地文本提取和确定性分块检索，不含 OCR、向量嵌入，也不是引用审计级语义搜索系统。
 - 受限 Python worker 不是 OS 级沙箱。
 - Provider 能力不同；经过有限恢复后，模型输出仍可能格式错误或数学上错误。
 - Windows installer 尚未配置公开代码签名身份。
@@ -203,6 +209,10 @@ Provider E2E 使用本地 mock HTTP server。真实付费 Provider 测试不会�
 5. 独立审查每个关键证明步骤。
 
 仓库包含安全的合成示例：[`examples/divisibility-by-30.json`](examples/divisibility-by-30.json)。
+
+## ES(7) 案例状态
+
+应用可以承载长期运行的 Erdős–Szekeres `ES(7)` 探索，但该项目目前仍是**进行中**。计算、已被否定的中间判据、有界搜索和模型论证会作为研究证据保留；它们都不会被表述成公开目标的证明。“继续”会保留已有成果，并从检查点保存的下一阶段推进。
 
 ## 参与贡献
 

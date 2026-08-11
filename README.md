@@ -13,7 +13,7 @@ This is an independent open-source project. References to OpenAI-compatible APIs
 Windows 10/11 x64 users:
 
 1. Open the [Gitee Releases page](https://gitee.com/lu-chuanyou/math-research-agent/releases).
-2. Download `Math-Research-Agent-Setup-1.0.0.exe`.
+2. Download `Math-Research-Agent-Setup-1.1.0.exe`.
 3. Run the installer and open Math Research Agent.
 4. Open **Settings**, enter your own model Provider, Base URL, model, and API key.
 5. Run **Runtime Diagnostics**, then start a research project.
@@ -29,7 +29,8 @@ The application can:
 - turn a natural-language question into a validated structured specification;
 - run a bounded, persistent autonomous research workflow with specialized roles;
 - maintain research branches, evidence, failed routes, proof steps, and a proof graph;
-- execute restricted Python, SymPy, NumPy, SciPy, and optional Z3 checks;
+- execute restricted Python, SymPy, NumPy, SciPy, bounded Z3 checks, and real Lean 4 kernel checks;
+- extract and index text from PDF, DOCX, text, Markdown, and LaTeX sources for bounded research context and source-aware chat;
 - critique candidate arguments before any verification label is promoted;
 - pause, checkpoint, recover interrupted sessions, and resume from the saved next stage;
 - use either a deterministic local coordinator or an OpenAI-compatible model provider;
@@ -47,7 +48,7 @@ The project distinguishes evidence levels instead of collapsing them into “pro
 | `COMPUTATIONALLY VERIFIED` | A recorded machine computation checked a bounded claim or artifact. |
 | `SYMBOLICALLY VERIFIED` | A symbolic engine checked the specified transformation or identity. |
 | `EXACTLY VERIFIED` | Exact arithmetic or an exact rerunnable witness checked the stated claim. |
-| `FORMALLY VERIFIED` | An external proof assistant has accepted a faithful formalization. The current app does not automatically emit this level. |
+| `FORMALLY VERIFIED` | Lean's kernel accepted the submitted theorem and the app linked it to an independently reviewed proof with an exact matching formalization target. |
 | `LLM ASSESSED ONLY` | A model judged the statement; no independent machine or formal evidence establishes it. |
 
 A candidate proof remains uncertain when a critical step is invalid, unresolved, requires a missing lemma, or lacks the required computation/formalization. See [Verification policy](docs/VERIFICATION.md).
@@ -59,6 +60,9 @@ A candidate proof remains uncertain when a critical step is invalid, unresolved,
 - Configurable iteration, wall-clock, branch, tool-time, provider-time, and checkpoint budgets.
 - Typed research nodes, graph edges, evidence records, proof documents, and per-step review status.
 - Reproducible exact counterexample stress tests with bundled synthetic demo cases.
+- Project chat with explicit research-control routing and bounded context retrieved from imported documents.
+- Local document extraction/chunk indexing plus optional arXiv and Crossref literature search.
+- Audited Python, SymPy, Z3, and Lean tool runs with exact input artifacts, separated output/error streams, timeouts, and strict evidence labels.
 - OpenAI-compatible `/chat/completions` transport with bounded retries, SSE normalization, tool-call handling, reasoning-content compatibility, and structured-JSON recovery.
 - Local Markdown/LaTeX report export and JSON counterexample evidence export.
 - Restart recovery that converts interrupted runs to a resumable paused checkpoint.
@@ -74,7 +78,8 @@ Electron main process
         ├── SQLite project and checkpoint store
         ├── research orchestrator and provider adapter
         ├── safeStorage credential wrapper
-        └── isolated Python worker → SymPy / NumPy / SciPy / optional Z3
+        ├── isolated Python worker → SymPy / NumPy / SciPy / Z3
+        └── audited Lean 4 / Lake adapter → kernel acceptance
 ```
 
 The renderer runs with context isolation, no Node integration, Electron sandboxing, denied popup windows, and a narrow preload bridge. Detailed module and trust-boundary notes are in [Architecture](docs/ARCHITECTURE.md).
@@ -90,7 +95,7 @@ The packaged application is currently developed and verified for **64-bit Window
 - npm (included with Node.js)
 - Python 3.12 or newer available as `python`
 - Python packages from `python/requirements.txt` for development and tests
-- Optional external tools: Lean and SageMath executables are currently capability-detected only
+- Optional external Lean 4 and Lake installation for kernel-checked formal verification; SageMath remains capability-detected only
 
 ## Developer quick start
 
@@ -131,7 +136,7 @@ Transitions are dynamic. A verified counterexample can shorten the path; missing
 
 ## Tool execution
 
-The Python worker uses `python -I`, a per-project workspace, JSON-only input/output, input schemas, an AST allowlist, restricted builtins/imports, and a configurable timeout. It supports mathematical operations rather than arbitrary shell execution.
+The Python worker uses `python -I -B -X utf8`, a per-project workspace, a single JSON protocol channel, separate captured program stdout/stderr, input schemas, an AST allowlist, restricted builtins/imports, output limits, and a configurable timeout. The Z3 adapter reports `SAT`, `UNSAT`, or `UNKNOWN` only for the submitted bounded encoding. The Lean adapter invokes real Lake/Lean executables and stores the exact source and kernel output in a local audit artifact.
 
 **This is defense in depth, not a perfect OS-level sandbox.** Python and native scientific packages are complex. Do not run untrusted model-generated code on a machine where process-level compromise would be unacceptable. See [Security policy](SECURITY.md).
 
@@ -140,7 +145,7 @@ The Python worker uses `python -I`, a per-project workspace, JSON-only input/out
 - Project records, settings, checkpoints, evidence, proof attempts, and research history are stored locally in the Electron user-data directory, currently `%APPDATA%\math-research-agent\research.sqlite3` on Windows.
 - Provider credentials are encrypted through Electron `safeStorage` when Windows secure storage is available; the encrypted value is stored in the local database.
 - A provider run sends the project question, goal, background, known results, constraints, current specification, recent steps, proof/evidence context, and selected source excerpts to the configured API.
-- Imported files are copied to local user data. Text/Markdown/LaTeX excerpts may be included in provider context; PDF bytes are not automatically uploaded and this release does not perform PDF OCR.
+- Imported PDF, DOCX, text, Markdown, and LaTeX files are copied to local user data, text-extracted and chunk-indexed. Only bounded retrieved excerpts may enter provider context; original PDF/DOCX bytes are not uploaded, and image-only PDFs are not OCRed.
 - Rotating provider debug logs contain response status, schema information, and redacted model response content. They can still contain sensitive research text even though credential patterns are filtered.
 
 Read [Privacy](docs/PRIVACY.md) before using confidential research or third-party documents.
@@ -169,6 +174,7 @@ All public tests use synthetic temporary data and require no real API key:
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd test
+npm.cmd run test:formal-tools
 npm.cmd run build
 npm.cmd run test:e2e
 ```
@@ -177,6 +183,7 @@ After `npm.cmd run dist`, run the packaged smoke test with:
 
 ```powershell
 npm.cmd run test:packaged
+npm.cmd run test:packaged-runtime
 ```
 
 Provider E2E uses a local mock HTTP server. Tests against a real paid provider are intentionally excluded from public CI.
@@ -184,9 +191,8 @@ Provider E2E uses a local mock HTTP server. Tests against a real paid provider a
 ## Current limitations
 
 - Source development uses the developer's configured Python. The Windows installer bundles CPython 3.12.10, SymPy, NumPy, SciPy, and Z3.
-- Lean and SageMath are detected but are not yet invoked as full proof adapters.
-- Imported PDFs are stored locally without OCR or semantic indexing.
-- Source excerpts are simple bounded text slices, not a citation-grade retrieval system.
+- Lean 4/Lake is a real external proof adapter, but it is not bundled; users who need formal checks must install it or configure its path. SageMath remains optional capability detection.
+- Imported documents use local text extraction and deterministic chunk retrieval, not OCR, embeddings, or a citation-grade semantic search engine.
 - The restricted Python worker is not an OS-level sandbox.
 - Provider compatibility varies, and model output can remain malformed or mathematically wrong after bounded recovery.
 - The Windows installer has no configured public code-signing identity.
@@ -203,6 +209,10 @@ The application records experiment/tool inputs, code, outputs, environment strin
 5. independently review every critical proof step.
 
 A safe synthetic example is provided in [`examples/divisibility-by-30.json`](examples/divisibility-by-30.json).
+
+## ES(7) case-study status
+
+The included application state can support long-running exploration of an Erdős–Szekeres `ES(7)` project, but the project is **ongoing**. Computations, refuted intermediate criteria, bounded searches, and model arguments are retained as research evidence; none of them is presented as a proof of the open target. Resume preserves the existing checkpoint and proceeds from its stored next stage.
 
 ## Contributing
 

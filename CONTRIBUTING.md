@@ -29,6 +29,7 @@ Required checks:
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd test
+npm.cmd run test:formal-tools
 npm.cmd run build
 npm.cmd run test:e2e
 ```
@@ -60,6 +61,8 @@ npm.cmd run test:packaged-runtime
 - Add time, input, output, and workspace limits.
 - Record executable version, inputs, outputs, and verification scope.
 - Capability detection is not verification. A detected Lean or SageMath executable does not prove a statement.
+- A Lean adapter must retain exact source and kernel output, reject unsound placeholders or execution escapes, and never equate kernel acceptance with faithful natural-language formalization without an explicit reviewed target link.
+- A Z3 adapter must preserve the submitted encoding, bounds, timeout, solver status, model only for `SAT`, and reason for `UNKNOWN`; it must not promote solver status to a theorem proof.
 
 ## Database migrations
 

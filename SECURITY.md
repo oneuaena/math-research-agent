@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest `1.0.x` source and release line. Older development builds may not receive backports.
+Security fixes are applied to the latest `1.1.x` source and release line. Older development builds may not receive backports.
 
 ## Reporting a vulnerability
 
@@ -36,7 +36,7 @@ Reports are especially important for:
 
 ## Security model and non-goals
 
-The renderer uses context isolation, no Node integration, Electron sandboxing, and a narrow preload bridge. The Python worker uses isolated mode, schemas, an AST allowlist, restricted builtins/imports, a per-project workspace, and timeouts.
+The renderer uses context isolation, no Node integration, Electron sandboxing, and a narrow preload bridge. The Python worker uses isolated UTF-8 mode, schemas, an AST allowlist, restricted builtins/imports, a per-project workspace, time and output limits, and separated protocol/program streams. Native Lean execution uses a no-shell argument array plus a restrictive source policy; Z3 receives bounded SMT-LIB input. Exact inputs and redacted outputs are retained for audit.
 
 These controls reduce risk but are **not a perfect OS-level sandbox**. Model output and imported content remain untrusted. Do not use the application for secrets whose exposure would be catastrophic, and do not assume mathematical or code output is safe merely because it was model-generated.
 

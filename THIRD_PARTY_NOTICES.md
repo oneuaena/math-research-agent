@@ -2,13 +2,16 @@
 
 Math Research Agent is licensed under Apache-2.0. That license does not replace the licenses of its dependencies.
 
-The following table records the direct dependencies resolved in `package-lock.json` for the 1.0.4 release candidate. Transitive notices remain available in each installed package and, for Electron distributions, in the generated Chromium licenses file.
+The following table records the direct dependencies resolved in `package-lock.json` for the current release. Transitive notices remain available in each installed package and, for Electron distributions, in the generated Chromium licenses file.
 
 | Dependency | Use | Resolved version | License |
 | --- | --- | ---: | --- |
 | @xyflow/react | Research graph rendering | 12.11.2 | MIT |
+| fast-xml-parser | arXiv Atom metadata parsing | 5.10.1 | MIT |
 | KaTeX | Mathematical typesetting | 0.16.47 | MIT |
 | lucide-react | Icons | 0.468.0 | ISC |
+| mammoth | DOCX text extraction | 1.12.1 | BSD-2-Clause |
+| pdf-parse | Page-aware PDF text extraction | 2.4.5 | Apache-2.0 |
 | React / React DOM | Renderer UI | 19.2.8 | MIT |
 | react-markdown | Markdown rendering | 10.1.0 | MIT |
 | rehype-katex | KaTeX integration | 7.0.1 | MIT |
@@ -31,4 +34,4 @@ The self-contained Windows installer bundles the following runtime components ou
 
 The bundled SciPy/NumPy wheels may include native numerical runtimes and GCC runtime components. Where GPL-3.0-or-later code is present, it is covered by the GCC Runtime Library Exception, which permits eligible generated target code to be distributed under terms of the distributor's choice. Full upstream notices remain in the bundled `.dist-info/licenses` directories. The project's Apache-2.0 license does not relicense these components.
 
-Lean, SageMath, DeepSeek, OpenAI, Anthropic, and other provider or tool names are factual compatibility references only. Lean and SageMath are not bundled; model-provider services are not bundled, owned, or endorsed by this project.
+Lean, SageMath, DeepSeek, OpenAI, Anthropic, and other provider or tool names are factual compatibility references only. Lean 4/Lake is supported as an external executable (v4.32.0 was used for the v1.1.0 validation) and remains under its upstream Apache-2.0 license; it is not bundled. SageMath and model-provider services are not bundled, owned, or endorsed by this project.

@@ -22,6 +22,10 @@ It cannot establish an exact universal theorem, exclude unsampled counterexample
 
 A reproducible program checked a bounded statement or artifact with a declared algorithm. The label applies only to the checked domain and implementation. Independent reruns, test vectors, and exact input/output strengthen the evidence but do not automatically generalize it.
 
+### BOUNDED CHECK
+
+A finite search or SMT encoding was checked within explicit bounds. `SAT` means the submitted encoding has a model, `UNSAT` means that encoding has none, and `UNKNOWN` establishes neither. None of these statuses proves that the encoding faithfully represents the natural-language theorem, and bounded `UNSAT` does not establish an unbounded theorem.
+
 ### SYMBOLICALLY VERIFIED
 
 A symbolic engine validated the specified identity, simplification, solution, derivative, integral, or transformation under recorded assumptions. The label applies to the encoded expression; it does not prove that the encoding faithfully represents the original natural-language theorem.
@@ -34,9 +38,11 @@ An exact witness refutes a universal statement, but exact verification of finite
 
 ### FORMALLY VERIFIED
 
-A trusted proof assistant kernel has accepted a faithful formalization of the theorem and assumptions. The record must identify the formal source, tool/version, dependencies/axioms, command, and successful output.
+A trusted proof assistant kernel has accepted a formal source file. The record must identify the exact source, tool/version, dependencies/axioms, command, successful output, proof record, natural-language target, and independent review.
 
-The current application detects Lean/SageMath availability but does not automatically invoke a complete proof-assistant adapter or emit a separate `formally-verified` persisted status. Capability detection, generated Lean text, or an LLM saying “Lean accepts this” must not be labeled `FORMALLY VERIFIED`.
+The Lean 4 adapter invokes the real `lake env lean` toolchain and persists its source and kernel output. It rejects `sorry`, `admit`, newly declared axioms/constants, native or unsafe shortcuts, metaprogramming, IO, and foreign execution. Kernel acceptance alone checks only the submitted formal statement. The application emits persisted `formally-verified` status only when the tool result is successful, `proofId` refers to the candidate proof, `formalizationOf` exactly equals that proof's theorem, the proof is independently reviewed, and every critical step is valid.
+
+Capability detection, generated Lean text, a kernel-accepted theorem unrelated to the target, or an LLM saying “Lean accepts this” must not be labeled `FORMALLY VERIFIED`. SageMath availability does not currently provide a formal evidence promotion path.
 
 ## Promotion rules
 
@@ -46,6 +52,8 @@ A result may move upward only when a new stored artifact directly supports the s
 - repeated retries or agreement among model roles;
 - survival of bounded tests;
 - adapter availability without an executed check;
+- Z3 `SAT` or `UNSAT` without a reviewed encoding-to-theorem correspondence;
+- Lean kernel acceptance without an exact target link and independent proof review;
 - unrecorded manual computation;
 - a source citation that does not contain the claimed result;
 - approximate equality presented as exact equality.

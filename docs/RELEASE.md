@@ -21,6 +21,7 @@ python -m pip install -r python\requirements.txt
 npm.cmd run typecheck
 npm.cmd run lint
 npm.cmd test
+npm.cmd run test:formal-tools
 npm.cmd run build
 npm.cmd run test:e2e
 ```
@@ -32,7 +33,7 @@ npm.cmd run runtime:prepare
 npm.cmd run test:bundled-python
 ```
 
-The preparation script downloads the official CPython 3.12.10 x64 embeddable ZIP, verifies its fixed SHA-256, obtains exact PyPI wheels and verifies PyPI SHA-256 metadata, then installs them offline into `runtime/python`.
+The preparation script downloads the official CPython 3.12.10 x64 embeddable ZIP, verifies its fixed SHA-256, obtains exact PyPI wheels and verifies PyPI SHA-256 metadata, then installs them offline into `runtime/python`. Lean is deliberately external rather than bundled; release validation records the tested Lean/Lake versions and runs `test:formal-tools` when the toolchain is available.
 
 ## 5. Build and smoke-test
 
@@ -42,7 +43,7 @@ npm.cmd run test:packaged
 npm.cmd run test:packaged-runtime
 ```
 
-Also install the NSIS executable over an existing synthetic/real local 1.0 profile, verify user-data preservation, and rerun `test:packaged-runtime` against the installed executable with system Python removed from `PATH`.
+Also install the NSIS executable over an existing synthetic/real local profile, verify user-data preservation and checkpoint counts, and rerun `test:packaged-runtime` against the installed executable with system Python removed from `PATH`.
 
 Record installer and unpacked sizes and calculate:
 

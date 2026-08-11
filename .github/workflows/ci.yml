@@ -42,3 +42,30 @@ jobs:
           cache: npm
       - run: npm ci --ignore-scripts
       - run: npm audit
+
+  formal-verification:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: python/requirements.txt
+      - run: npm ci
+      - run: python -m pip install -r python/requirements.txt
+      - name: Install pinned Lean 4 toolchain
+        shell: pwsh
+        run: |
+          $archive = "$env:RUNNER_TEMP\elan.zip"
+          $directory = "$env:RUNNER_TEMP\elan"
+          Invoke-WebRequest https://github.com/leanprover/elan/releases/latest/download/elan-x86_64-pc-windows-msvc.zip -OutFile $archive
+          Expand-Archive $archive -DestinationPath $directory
+          & "$directory\elan-init.exe" -y --default-toolchain leanprover/lean4:v4.32.0 --no-modify-path
+          "$env:USERPROFILE\.elan\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+      - run: npm run test:formal-tools
