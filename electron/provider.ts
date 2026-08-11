@@ -11,8 +11,9 @@ import {
 } from '../src/shared/provider-protocol';
 import { parseProviderHttpResponse, ProviderTransportError } from '../src/shared/provider-transport';
 import { extractStructuredJson } from '../src/shared/structured-json';
+import { buildProviderSourceContext } from '../src/shared/source-context';
 import type {
-  AgentStage, ProjectSnapshot, ProviderConnectionResult, ProviderErrorType, ProviderSettings, ResearchBranch,
+  AgentStage, DocumentSearchResult, ProjectSnapshot, ProviderConnectionResult, ProviderErrorType, ProviderSettings, ResearchBranch,
   ResearchRole, ToolInvocation, ToolName, ToolResult,
 } from '../src/shared/types';
 import type { CredentialStore } from './credentials';
@@ -25,12 +26,14 @@ export interface ProviderRoleRequest {
   role: ResearchRole;
   snapshot: ProjectSnapshot;
   branch: ResearchBranch | null;
+  sourceContext?: DocumentSearchResult[];
 }
 
 export interface ModelProvider {
   runStage(stage: AgentStage, snapshot: ProjectSnapshot, signal: AbortSignal): Promise<StageResult>;
   formalize(snapshot: ProjectSnapshot, signal: AbortSignal): Promise<FormalizationPayload>;
   runRole(request: ProviderRoleRequest, signal: AbortSignal): Promise<RoleAction>;
+  respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal): Promise<string>;
 }
 
 type ErrorPayload = {
@@ -41,7 +44,7 @@ type NativeToolExecutor = (invocation: ToolInvocation) => Promise<ToolResult>;
 
 const nativeToolNames = [
   'run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute',
-  'capability_check', 'z3_check',
+  'capability_check', 'z3_check', 'lean_check',
 ] as const satisfies readonly ToolName[];
 
 const nativeToolNameSchema = z.enum(nativeToolNames);
@@ -54,7 +57,8 @@ const nativeToolArgumentSchemas: Record<ToolName, z.ZodType<Record<string, unkno
   integrate: z.object({ purpose: purposeSchema, expression: z.string().min(1).max(10_000), symbols: z.array(z.string().min(1).max(80)).max(100).optional(), variable: z.string().min(1).max(80).optional() }).passthrough(),
   matrix_compute: z.object({ purpose: purposeSchema, matrix: z.array(z.array(z.union([z.string(), z.number()])).max(50)).max(50), operation: z.enum(['det', 'rank', 'eigenvals', 'inverse']) }).passthrough(),
   capability_check: z.object({ purpose: purposeSchema }).passthrough(),
-  z3_check: z.object({ purpose: purposeSchema, smt2: z.string().min(1).max(50_000) }).passthrough(),
+  z3_check: z.object({ purpose: purposeSchema, smt2: z.string().min(1).max(200_000), timeoutMs: z.number().int().min(1).max(120_000).optional() }).passthrough(),
+  lean_check: z.object({ purpose: purposeSchema, code: z.string().min(1).max(100_000), proofId: z.string().uuid().optional(), formalizationOf: z.string().max(8_000).optional() }).passthrough(),
 };
 
 const nativeTools = [
@@ -65,7 +69,8 @@ const nativeTools = [
   ['integrate', 'Integrate a symbolic expression.', { purpose: { type: 'string' }, expression: { type: 'string' }, symbols: { type: 'array', items: { type: 'string' } }, variable: { type: 'string' } }, ['purpose', 'expression']],
   ['matrix_compute', 'Compute determinant, rank, eigenvalues, or inverse of a finite matrix.', { purpose: { type: 'string' }, matrix: { type: 'array', items: { type: 'array', items: { type: ['number', 'string'] } } }, operation: { type: 'string', enum: ['det', 'rank', 'eigenvals', 'inverse'] } }, ['purpose', 'matrix', 'operation']],
   ['capability_check', 'Report which optional local mathematical verification adapters are available.', { purpose: { type: 'string' } }, ['purpose']],
-  ['z3_check', 'Run a bounded SMT-LIB2 satisfiability check when Z3 is available.', { purpose: { type: 'string' }, smt2: { type: 'string' } }, ['purpose', 'smt2']],
+  ['z3_check', 'Run a bounded SMT-LIB2 satisfiability check. SAT, UNSAT, UNKNOWN, and timeout remain distinct, and the result proves only the supplied encoding.', { purpose: { type: 'string' }, smt2: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1, maximum: 120000 } }, ['purpose', 'smt2']],
+  ['lean_check', 'Compile a Lean 4 theorem with Lake and accept the artifact only when the Lean kernel succeeds without sorry, admit, axiom, constant, native_decide, unsafe, or partial escapes. Do not claim that the Lean statement faithfully formalizes a research theorem unless proofId and formalizationOf match an independently reviewed proof record.', { purpose: { type: 'string' }, code: { type: 'string' }, proofId: { type: 'string' }, formalizationOf: { type: 'string' } }, ['purpose', 'code']],
 ].map(([name, description, properties, required]) => ({
   type: 'function',
   function: { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } },
@@ -130,7 +135,7 @@ const roleActionItemContract = {
   branches: { title: 'string', objective: 'string', method: 'string', priority: 'integer 1..100' },
   proofSteps: { title: 'string', statement: 'string', argument: 'string', dependencies: 'string[]', critical: 'boolean' },
   proofReviews: { stepId: 'string', status: 'VALID|INVALID|UNCERTAIN|REQUIRES_LEMMA|REQUIRES_COMPUTATION|REQUIRES_FORMALIZATION', comment: 'string' },
-  toolCalls: { name: 'run_python|symbolic_simplify|solve_equation|differentiate|integrate|matrix_compute|z3_check', purpose: 'string', input: 'object' },
+  toolCalls: { name: 'run_python|symbolic_simplify|solve_equation|differentiate|integrate|matrix_compute|z3_check|lean_check', purpose: 'string', input: 'object' },
 };
 
 const localTemplates: Partial<Record<AgentStage, (snapshot: ProjectSnapshot) => StageResult>> = {
@@ -155,6 +160,12 @@ const localTemplates: Partial<Record<AgentStage, (snapshot: ProjectSnapshot) => 
 };
 
 export class LocalProvider implements ModelProvider {
+  async respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal): Promise<string> {
+    if (signal.aborted) throw new DOMException('Stopped', 'AbortError');
+    const question = [...messages].reverse().find((message) => message.role === 'user')?.content ?? '';
+    return `Local coordinator received: ${question.slice(0, 500)}\n\nConfigure an OpenAI-compatible provider for a model-generated answer. Imported sources and research state remain available to the autonomous workflow.`;
+  }
+
   async runStage(stage: AgentStage, snapshot: ProjectSnapshot, signal: AbortSignal): Promise<StageResult> {
     if (signal.aborted) throw new DOMException('Stopped', 'AbortError');
     await new Promise((resolve) => setTimeout(resolve, 180));
@@ -282,6 +293,11 @@ export class ResponsesProvider implements ModelProvider {
     throw this.malformed('Research stage response did not match the required JSON contract.', this.endpoint('/chat/completions'), 0, 200);
   }
 
+  async respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal): Promise<string> {
+    const result = await this.chat(messages, signal, { json: false, maxTokens: 4096, disableThinking: true });
+    return result.content;
+  }
+
   async formalize(snapshot: ProjectSnapshot, signal: AbortSignal): Promise<FormalizationPayload> {
     const contract = {
       quantifiers: ['for all n'],
@@ -310,6 +326,25 @@ export class ResponsesProvider implements ModelProvider {
   }
 
   async runRole(request: ProviderRoleRequest, signal: AbortSignal): Promise<RoleAction> {
+    const sourceQuery = [
+      request.snapshot.project.question,
+      request.snapshot.project.goal,
+      request.branch?.objective ?? '',
+      request.stage,
+      ...request.snapshot.researchSteps.slice(-3).map((step) => `${step.goal} ${step.action} ${step.rationaleSummary}`),
+    ].join('\n');
+    const sources = request.sourceContext?.length
+      ? request.sourceContext.map((chunk) => ({
+        sourceId: chunk.sourceId,
+        title: chunk.filename,
+        indexedCharacters: request.snapshot.sources.find((source) => source.id === chunk.sourceId)?.contentCharacters ?? chunk.text.length,
+        extractionStatus: 'complete' as const,
+        completeDocumentIncluded: request.sourceContext!.filter((item) => item.sourceId === chunk.sourceId).length >= (request.snapshot.sources.find((source) => source.id === chunk.sourceId)?.chunkCount ?? Number.POSITIVE_INFINITY),
+        selectedChunkIndexes: [chunk.chunkIndex],
+        totalChunks: request.snapshot.sources.find((source) => source.id === chunk.sourceId)?.chunkCount ?? 1,
+        chunks: [{ index: chunk.chunkIndex, page: chunk.page, section: chunk.section, chunkId: chunk.id, text: chunk.text }],
+      }))
+      : buildProviderSourceContext(request.snapshot.sources, sourceQuery, request.snapshot.researchSteps.length);
     const context = {
       project: request.snapshot.project,
       specification: request.snapshot.specifications.at(-1),
@@ -317,13 +352,21 @@ export class ResponsesProvider implements ModelProvider {
       recentSteps: request.snapshot.researchSteps.slice(-12),
       proofs: request.snapshot.proofs.slice(-2),
       evidence: request.snapshot.evidence.slice(-20),
-      sources: request.snapshot.sources.map((source) => ({ title: source.title, excerpt: source.excerpt.slice(0, 4000) })),
+      sources,
+      literature: request.snapshot.literature.slice(-30).map((record) => ({
+        sourceId: record.sourceId, title: record.title, authors: record.authors, year: record.year, venue: record.venue,
+        doi: record.doi, url: record.url, arxivId: record.arxivId, abstract: record.abstract, provider: record.provider,
+        verificationStatus: record.verificationStatus,
+      })),
     };
     const hasNativeTools = nativeToolStages.has(request.stage);
     const toolInstruction = hasNativeTools
       ? ' Native mathematical tools are available when a reproducible computation is useful, but they are optional. Do not repeat a tool in toolCalls[] after executing it natively; toolCalls[] is only a deferred fallback.'
       : '';
-    const prompt = `Act as the ${request.role} during stage ${request.stage}. Return exactly one JSON object matching this shape and field types:\n${JSON.stringify(roleActionContract)}\nArray item contracts (instructions only; do not copy placeholder values): ${JSON.stringify(roleActionItemContract)}\nUse [] when a collection has no relevant item. nextStage must be an uppercase research stage.${toolInstruction} Never label model output as verified; citations may only use supplied source excerpts; model proof steps are uncertain until independently checked. Context:\n${JSON.stringify(context)}`;
+    const sourceInstruction = sources.length || request.snapshot.literature.length
+      ? ' Imported source chunks and literature metadata are authorized research context. Read every supplied chunk before responding, identify the source title and chunk index when relying on it, and do not claim full-document review when completeDocumentIncluded is false. Cite literature only by the supplied title plus DOI, arXiv ID, or URL; never invent a reference.'
+      : '';
+    const prompt = `Act as the ${request.role} during stage ${request.stage}. Return exactly one JSON object matching this shape and field types:\n${JSON.stringify(roleActionContract)}\nArray item contracts (instructions only; do not copy placeholder values): ${JSON.stringify(roleActionItemContract)}\nUse [] when a collection has no relevant item. nextStage must be an uppercase research stage.${toolInstruction}${sourceInstruction} Never label model output as verified; citations may only use supplied source chunks; model proof steps are uncertain until independently checked. Context:\n${JSON.stringify(context)}`;
     const response = await this.requestJsonWithMeta(prompt, signal, hasNativeTools ? request.snapshot.project.id : undefined);
     let parsed = roleActionSchema.safeParse(response.value);
     let nativeToolExecutions = response.nativeToolExecutions;
@@ -427,9 +470,17 @@ export class ResponsesProvider implements ModelProvider {
             toolMessage: JSON.stringify({
               ok: execution.ok,
               output: execution.output,
+              stdout: execution.stdout,
+              stderr: execution.stderr,
               error: execution.error,
+              error_type: execution.errorType,
+              exit_code: execution.exitCode,
               durationMs: execution.durationMs,
+              timeout: execution.timeout,
               environment: execution.environment,
+              verification_status: execution.verificationStatus,
+              verification_level: execution.verificationLevel,
+              reason_unknown: execution.reasonUnknown,
             }),
           };
         },
@@ -574,10 +625,22 @@ export class ResponsesProvider implements ModelProvider {
       purpose: String(purpose),
       input,
       ok: result.ok,
+      success: result.success,
       output: result.output.slice(0, 20_000),
+      stdout: result.stdout.slice(0, 20_000),
+      stderr: result.stderr.slice(0, 20_000),
       ...(result.error ? { error: this.safeApiMessage(result.error, 0).slice(0, 2000) } : {}),
+      errorType: result.errorType,
+      exitCode: result.exitCode,
+      workerExitCode: result.workerExitCode,
       durationMs: result.durationMs,
+      timeout: result.timeout,
       ...(result.environment ? { environment: result.environment.slice(0, 1000) } : {}),
+      verificationStatus: result.verificationStatus,
+      verificationLevel: result.verificationLevel,
+      reasonUnknown: result.reasonUnknown?.slice(0, 2000),
+      artifactLocation: result.artifactLocation,
+      auditLogPath: result.auditLogPath,
     };
   }
 

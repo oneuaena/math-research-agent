@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { basename, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -31,6 +31,21 @@ function run(executable, args, options = {}) {
 
 function sha256(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex').toUpperCase();
+}
+
+function removeNonPortableGeneratedFiles(directory) {
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const target = join(directory, entry.name);
+    if (entry.isDirectory()) {
+      if (entry.name === '__pycache__' || (directory.endsWith(join('Lib', 'site-packages')) && entry.name === 'bin')) {
+        rmSync(target, { recursive: true, force: true });
+      } else {
+        removeNonPortableGeneratedFiles(target);
+      }
+    } else if (/\.py[co]$/i.test(entry.name)) {
+      rmSync(target, { force: true });
+    }
+  }
 }
 
 function download() {
@@ -97,11 +112,16 @@ run(buildPython, [
   '--no-index', '--find-links', wheelCache, '--target', sitePackages, '-r', requirements,
 ], { env: { ...process.env, PIP_NO_INPUT: '1' } });
 
-const probe = execFileSync(join(output, 'python.exe'), ['-I', '-c', [
+const probe = execFileSync(join(output, 'python.exe'), ['-I', '-B', '-X', 'utf8', '-c', [
   'import json, sys, sympy, numpy, scipy, z3',
   'print(json.dumps({"python": sys.version.split()[0], "sympy": sympy.__version__, "numpy": numpy.__version__, "scipy": scipy.__version__, "z3": z3.get_version_string()}))',
-].join('; ')], { encoding: 'utf8', windowsHide: true }).trim();
+].join('; ')], {
+  encoding: 'utf8',
+  windowsHide: true,
+  env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1', PYTHONNOUSERSITE: '1', PYTHONUTF8: '1' },
+}).trim();
 const packages = JSON.parse(probe);
+removeNonPortableGeneratedFiles(sitePackages);
 writeFileSync(join(output, 'RUNTIME_MANIFEST.json'), `${JSON.stringify({
   source: url,
   archiveSha256: expectedSha256,

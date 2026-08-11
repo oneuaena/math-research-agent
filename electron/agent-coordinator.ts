@@ -3,9 +3,10 @@ import type { Activity, AgentEvent } from '../src/shared/types';
 import type { CredentialStore } from './credentials';
 import type { ResearchDatabase } from './database';
 import { createProvider } from './provider';
-import { ResearchOrchestrator } from './research-orchestrator';
+import { ResearchOrchestrator, type ResearchStateLogEntry } from './research-orchestrator';
 import { StressEngine } from './stress-engine';
 import type { ToolRunner } from './tool-runner';
+import type { LiteratureSearchService } from './literature-search';
 
 export class AgentCoordinator {
   private readonly runs = new Map<string, AbortController>();
@@ -15,16 +16,24 @@ export class AgentCoordinator {
     private readonly credentials: CredentialStore,
     private readonly tools: ToolRunner,
     private readonly publish: (event: AgentEvent) => void,
+    private readonly logState: (entry: ResearchStateLogEntry) => void = () => undefined,
+    private readonly literature?: LiteratureSearchService,
   ) {}
 
   start(projectId: string): void {
+    this.startRun(projectId, false);
+  }
+
+  resume(projectId: string): void {
+    this.startRun(projectId, true);
+  }
+
+  private startRun(projectId: string, resumeRequested: boolean): void {
     if (this.runs.has(projectId)) return;
     const controller = new AbortController();
     this.runs.set(projectId, controller);
-    void this.run(projectId, controller);
+    void this.run(projectId, controller, resumeRequested);
   }
-
-  resume(projectId: string): void { this.start(projectId); }
 
   pause(projectId: string): void {
     this.tools.stop(projectId);
@@ -35,7 +44,11 @@ export class AgentCoordinator {
     this.pause(projectId);
   }
 
-  private async run(projectId: string, controller: AbortController): Promise<void> {
+  isRunning(projectId: string): boolean {
+    return this.runs.has(projectId);
+  }
+
+  private async run(projectId: string, controller: AbortController, resumeRequested: boolean): Promise<void> {
     const settings = this.db.getSettings();
     if (this.db.getProject(projectId, false).project.mode === 'stress-test') {
       try {
@@ -53,7 +66,7 @@ export class AgentCoordinator {
     }
     try {
       const provider = createProvider(settings, this.credentials, (invocation) => this.tools.run(invocation));
-      await new ResearchOrchestrator(this.db, this.tools, provider, this.publish).run(projectId, controller.signal);
+      await new ResearchOrchestrator(this.db, this.tools, provider, this.publish, this.logState, this.literature).run(projectId, controller.signal, { resumeRequested });
     } catch (error) {
       if (controller.signal.aborted) return;
       const message = error instanceof Error ? error.message : 'Research run failed.';

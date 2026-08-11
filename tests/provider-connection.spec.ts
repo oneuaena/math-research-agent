@@ -47,7 +47,7 @@ test('test connection uses a non-streaming minimal chat request and maps HTTP er
   await providerFields.locator('input').nth(0).fill('test-model');
   await providerFields.locator('input').nth(1).fill(baseUrl);
   await providerFields.locator('input').nth(2).fill('test-credential');
-  await expect(dialog.locator('.settings-grid').nth(1).locator('input').nth(3)).toHaveValue('180');
+  await expect(dialog.getByLabel('Provider HTTP timeout · seconds')).toHaveValue('180');
   await dialog.getByRole('button', { name: 'Test', exact: true }).click();
   const diagnostic = dialog.getByRole('region', { name: 'Provider diagnostic' });
   await expect(diagnostic.getByText('CONNECTED')).toBeVisible();

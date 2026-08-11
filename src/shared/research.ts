@@ -34,14 +34,26 @@ const proofStepProposalSchema = z.object({
 });
 
 export const nativeToolExecutionSchema = z.object({
-  name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check']),
+  name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check']),
   purpose: z.string().min(1).max(500),
   input: z.record(z.string(), z.unknown()),
   ok: z.boolean(),
+  success: z.boolean(),
   output: z.string().max(20_000),
+  stdout: z.string().max(20_000),
+  stderr: z.string().max(20_000),
   error: z.string().max(2000).optional(),
+  errorType: z.enum(['NONE', 'TOOL_ERROR', 'PROGRAM_ERROR', 'VALIDATION_ERROR', 'TIMEOUT', 'OUTPUT_LIMIT', 'UNAVAILABLE', 'PROTOCOL_ERROR', 'UNSOUND_PROOF']),
+  exitCode: z.number().int().nullable(),
+  workerExitCode: z.number().int().nullable().optional(),
   durationMs: z.number().int().min(0),
+  timeout: z.boolean(),
   environment: z.string().max(1000).optional(),
+  verificationStatus: z.enum(['SUCCESS', 'SAT', 'UNSAT', 'UNKNOWN', 'BOUNDED_CHECK', 'FORMALLY_VERIFIED', 'REJECTED_UNSOUND', 'TOOL_FAILURE', 'PROGRAM_FAILURE']).optional(),
+  verificationLevel: z.enum(['CONJECTURE', 'UNCERTAIN', 'HEURISTIC', 'NUMERICAL_EVIDENCE', 'BOUNDED_CHECK', 'SYMBOLIC_CHECK', 'SAT', 'UNSAT', 'UNKNOWN', 'REQUIRES_LEMMA', 'REQUIRES_FORMALIZATION', 'FORMALLY_VERIFIED', 'REFUTED']).optional(),
+  reasonUnknown: z.string().max(2000).optional(),
+  artifactLocation: z.string().max(2000).optional(),
+  auditLogPath: z.string().max(2000).optional(),
 });
 
 export const roleActionSchema = z.object({
@@ -67,7 +79,7 @@ export const roleActionSchema = z.object({
     comment: z.string().max(4000),
   })).max(50).default([]),
   toolCalls: z.array(z.object({
-    name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'z3_check']),
+    name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'z3_check', 'lean_check']),
     purpose: z.string().min(1).max(500), input: z.record(z.string(), z.unknown()),
   })).max(8).default([]),
   nativeToolExecutions: z.array(nativeToolExecutionSchema).max(12).optional(),
@@ -96,6 +108,7 @@ export interface TransitionContext {
   verifiedCounterexample: boolean;
   proofVerified: boolean;
   cycle: number;
+  checkpointsInCycle: number;
 }
 
 export function chooseNextStage(stage: AgentStage, context: TransitionContext): AgentStage {
@@ -110,7 +123,7 @@ export function chooseNextStage(stage: AgentStage, context: TransitionContext): 
     PATTERN_DISCOVERY: 'LEMMA_GENERATION', LEMMA_GENERATION: 'PROOF_ATTEMPT', PROOF_ATTEMPT: 'PROOF_CRITIQUE',
     PROOF_CRITIQUE: context.proofHasGaps && context.cycle < 2 ? 'REFLECT' : 'SYMBOLIC_VERIFY',
     SYMBOLIC_VERIFY: 'FORMAL_VERIFY', FORMAL_VERIFY: 'SYNTHESIZE', REFLECT: 'REPLAN', REPLAN: 'EXPLORE',
-    SYNTHESIZE: 'CHECKPOINT', CHECKPOINT: context.cycle >= 5 ? 'PAUSED' : 'EXPLORE',
+    SYNTHESIZE: 'CHECKPOINT', CHECKPOINT: context.checkpointsInCycle >= 5 ? 'PAUSED' : 'EXPLORE',
   };
   return transitions[stage] ?? 'REFLECT';
 }
@@ -118,13 +131,13 @@ export function chooseNextStage(stage: AgentStage, context: TransitionContext): 
 export function proofVerificationStatus(proof: ProofDocument): VerificationStatus {
   if (!proof.independentlyReviewed) return 'unverified';
   if (proof.steps.length === 0 || proof.steps.some((step) => step.critical && step.status !== 'VALID')) return 'unverified';
-  return proof.verificationStatus === 'symbolically-verified' || proof.verificationStatus === 'exactly-verified'
+  return proof.verificationStatus === 'formally-verified' || proof.verificationStatus === 'symbolically-verified' || proof.verificationStatus === 'exactly-verified'
     ? proof.verificationStatus : 'llm-assessed-only';
 }
 
 export function canDisplayVerifiedProof(proof: ProofDocument): boolean {
   const status = proofVerificationStatus(proof);
-  return proof.status === 'VERIFIED' && (status === 'exactly-verified' || status === 'symbolically-verified');
+  return proof.status === 'VERIFIED' && status === 'formally-verified';
 }
 
 export function specificationLevel(specification: StructuredSpecification): 'machine-executable' | 'symbolic' | 'natural-language' {

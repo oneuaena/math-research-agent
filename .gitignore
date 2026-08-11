@@ -28,6 +28,11 @@ __pycache__/
 .venv/
 venv/
 .pytest_cache/
+.lake/
+lake-packages/
+lean-projects/
+*.olean
+*.ilean
 
 # Local application and research data
 .test-user-data/

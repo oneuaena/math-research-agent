@@ -3,11 +3,32 @@ import { STAGE_LABELS } from '../src/shared/agent';
 import { canDisplayVerifiedProof, chooseNextStage, STAGE_ROLE, type RoleAction } from '../src/shared/research';
 import type {
   Activity, AgentEvent, AgentStage, Experiment, GraphEdge, ProofDocument, ResearchBranch, ResearchEvidence,
-  ResearchNode, ResearchSession, ResearchStep, StructuredSpecification, ToolInvocation, ToolResult,
+  ResearchNode, ResearchSession, ResearchStep, StructuredSpecification, ToolInvocation, ToolResult, VerificationStatus,
 } from '../src/shared/types';
 import type { ResearchDatabase } from './database';
 import type { ModelProvider } from './provider';
 import type { ToolRunner } from './tool-runner';
+import type { LiteratureSearchService } from './literature-search';
+
+export interface ResearchRunOptions {
+  resumeRequested?: boolean;
+}
+
+export interface ResearchStateLogEntry {
+  timestamp: string;
+  event: 'run_requested' | 'cycle_created' | 'loop_started' | 'action_started' | 'action_completed' | 'loop_stopped' | 'run_failed';
+  project_id: string;
+  session_id: string;
+  cycle_id: string;
+  cycle_index: number;
+  paused: boolean;
+  cycle_completed: boolean;
+  pending_tasks: number;
+  agent_loop_running: boolean;
+  resume_requested: boolean;
+  current_stage: AgentStage;
+  next_stage: AgentStage;
+}
 
 export class ResearchOrchestrator {
   constructor(
@@ -15,24 +36,31 @@ export class ResearchOrchestrator {
     private readonly tools: ToolRunner,
     private readonly provider: ModelProvider,
     private readonly publish: (event: AgentEvent) => void,
+    private readonly logState: (entry: ResearchStateLogEntry) => void = () => undefined,
+    private readonly literature?: LiteratureSearchService,
   ) {}
 
-  async run(projectId: string, signal: AbortSignal): Promise<void> {
+  async run(projectId: string, signal: AbortSignal, options: ResearchRunOptions = {}): Promise<void> {
+    const resumeRequested = options.resumeRequested ?? false;
     const settings = this.db.getSettings();
     let snapshot = this.db.getProject(projectId, false);
     const previous = snapshot.sessions.at(-1);
-    let session: ResearchSession = previous && previous.status !== 'COMPLETE'
-      ? { ...previous, status: 'RUNNING', failure: '', pauseReason: '', updatedAt: now() }
-      : this.newSession(projectId);
+    let session = this.prepareSession(projectId, previous, resumeRequested);
+    this.writeState('run_requested', session, resumeRequested, false);
+    if (previous && previous.status === 'PAUSED' && previous.nextStage === 'PAUSED' && resumeRequested) {
+      this.writeState('cycle_created', session, resumeRequested, false);
+    }
     this.db.saveRecord('sessions', session);
     const runStarted = performance.now();
     let runActions = 0;
+    this.writeState('loop_started', session, resumeRequested, true);
 
     try {
       while (!signal.aborted && runActions < settings.maxIterations && performance.now() - runStarted < settings.maxResearchMinutes * 60_000) {
         snapshot = this.db.getProject(projectId, false);
         const stage = session.nextStage;
         if (stage === 'PAUSED' || stage === 'FAILED' || stage === 'COMPLETE') break;
+        this.writeState('action_started', session, resumeRequested, true);
         const started = performance.now();
         const pending = this.activity(projectId, stage, STAGE_LABELS[stage], 'running');
         this.db.addActivity(pending);
@@ -55,6 +83,7 @@ export class ResearchOrchestrator {
           verifiedCounterexample,
           proofVerified: Boolean(proof && canDisplayVerifiedProof(proof)),
           cycle: session.checkpointCount,
+          checkpointsInCycle: Math.max(0, session.checkpointCount - session.cycleCheckpointStart),
         });
         const checkpointDue = session.actionCount + 1 >= (session.checkpointCount + 1) * settings.checkpointEvery;
         if (checkpointDue && ['EXPLORE', 'REFLECT', 'REPLAN', 'SYNTHESIZE'].includes(stage)) nextStage = 'CHECKPOINT';
@@ -82,6 +111,7 @@ export class ResearchOrchestrator {
           lastCheckpointAt: stage === 'CHECKPOINT' ? now() : session.lastCheckpointAt,
         };
         this.db.saveRecord('sessions', session);
+        this.writeState('action_completed', session, resumeRequested, true);
         runActions += 1;
         const completed = { ...pending, detail: action.summary, status: 'succeeded' as const, durationMs: elapsedMs };
         this.db.addActivity(completed);
@@ -98,6 +128,7 @@ export class ResearchOrchestrator {
         session = { ...session, status: 'PAUSED', currentStage: 'PAUSED', pauseReason: reason, updatedAt: now() };
       }
       this.db.saveRecord('sessions', session);
+      this.writeState('loop_stopped', session, resumeRequested, false);
       const activity = this.activity(projectId, session.currentStage, session.status === 'COMPLETE' ? 'Research complete' : 'Research paused', 'info', session.pauseReason);
       this.db.addActivity(activity);
       this.publish({ projectId, running: false, stage: session.currentStage, activity });
@@ -106,6 +137,7 @@ export class ResearchOrchestrator {
       const message = error instanceof Error ? error.message : 'Autonomous research failed.';
       session = { ...session, status: 'FAILED', currentStage: 'FAILED', failure: message, updatedAt: now() };
       this.db.saveRecord('sessions', session);
+      this.writeState('run_failed', session, resumeRequested, false);
       const activity = this.activity(projectId, 'FAILED', message, 'failed');
       this.db.addActivity(activity);
       this.publish({ projectId, running: false, stage: 'FAILED', activity });
@@ -125,7 +157,14 @@ export class ResearchOrchestrator {
       };
       return { action, specification };
     }
-    const action = await this.provider.runRole({ stage, role: STAGE_ROLE[stage] ?? 'research-synthesizer', snapshot, branch }, signal);
+    let currentSnapshot = snapshot;
+    if (stage === 'LITERATURE' && this.literature && this.db.getSettings().literatureSearchMode === 'auto') {
+      await this.literature.search(snapshot.project.id, [snapshot.project.question, snapshot.project.goal, branch?.objective ?? ''].filter(Boolean).join(' '), signal);
+      currentSnapshot = this.db.getProject(snapshot.project.id, false);
+    }
+    const sourceQuery = [currentSnapshot.project.question, currentSnapshot.project.goal, branch?.objective ?? '', stage].join('\n');
+    const sourceContext = this.db.searchDocumentChunks(currentSnapshot.project.id, sourceQuery, 8);
+    const action = await this.provider.runRole({ stage, role: STAGE_ROLE[stage] ?? 'research-synthesizer', snapshot: currentSnapshot, branch, sourceContext }, signal);
     return { action, specification: null };
   }
 
@@ -149,10 +188,22 @@ export class ResearchOrchestrator {
         { name: execution.name, purpose: execution.purpose, input: execution.input },
         {
           ok: execution.ok,
+          success: execution.success,
           output: execution.output,
+          stdout: execution.stdout,
+          stderr: execution.stderr,
           error: execution.error,
+          errorType: execution.errorType,
+          exitCode: execution.exitCode,
+          workerExitCode: execution.workerExitCode,
           durationMs: execution.durationMs,
+          timeout: execution.timeout,
           environment: execution.environment,
+          verificationStatus: execution.verificationStatus,
+          verificationLevel: execution.verificationLevel,
+          reasonUnknown: execution.reasonUnknown,
+          artifactLocation: execution.artifactLocation,
+          auditLogPath: execution.auditLogPath,
         },
       );
       toolCallIds.push(artifact.callId);
@@ -181,6 +232,12 @@ export class ResearchOrchestrator {
   ): { callId: string; evidenceId: string } {
     const callId = randomUUID();
     const createdAt = now();
+    const verificationStatus: VerificationStatus = !result.ok ? 'unverified'
+      : call.name === 'lean_check' && result.verificationStatus === 'FORMALLY_VERIFIED' ? 'formally-verified'
+      : call.name === 'z3_check' ? 'bounded-check'
+      : call.name === 'symbolic_simplify' || call.name === 'solve_equation' || call.name === 'differentiate' || call.name === 'integrate' || call.name === 'matrix_compute' ? 'symbolically-verified'
+      : call.name === 'run_python' ? 'computationally-verified'
+      : 'unverified';
     const experiment: Experiment = {
       id: callId,
       projectId,
@@ -194,7 +251,7 @@ export class ResearchOrchestrator {
       status: result.ok ? 'succeeded' : 'failed',
       durationMs: result.durationMs,
       environment: result.environment,
-      verificationStatus: result.ok ? (call.name === 'symbolic_simplify' ? 'symbolically-verified' : call.name === 'capability_check' ? 'unverified' : 'computationally-verified') : 'unverified',
+      verificationStatus,
       rerunOf: null,
       createdAt,
       updatedAt: createdAt,
@@ -206,18 +263,39 @@ export class ResearchOrchestrator {
       projectId,
       sessionId: session.id,
       branchId: branch?.id ?? null,
-      type: call.name === 'symbolic_simplify' ? 'symbolic-computation' : call.name === 'capability_check' ? 'formal-check' : 'exact-computation',
+      type: call.name === 'lean_check' || call.name === 'z3_check' || call.name === 'capability_check' ? 'formal-check'
+        : call.name === 'symbolic_simplify' || call.name === 'solve_equation' || call.name === 'differentiate' || call.name === 'integrate' || call.name === 'matrix_compute' ? 'symbolic-computation'
+        : 'exact-computation',
       title: call.purpose,
       content: result.ok ? result.output : result.error ?? 'Tool failed.',
-      verificationStatus: exact ? 'exactly-verified' : result.ok && call.name === 'symbolic_simplify' ? 'symbolically-verified' : 'unverified',
+      verificationStatus: exact && /['"]counterexample['"]\s*:\s*\{/.test(result.output) ? 'exactly-verified' : verificationStatus,
+      verificationLevel: result.verificationLevel ?? (result.ok && call.name === 'run_python' ? 'BOUNDED_CHECK' : undefined),
       sourceIds: [],
       experimentIds: [experiment.id],
       reproducible: result.ok,
       createdAt,
     };
     this.db.saveRecord('evidence', evidence);
+    if (call.name === 'lean_check' && result.ok && result.verificationStatus === 'FORMALLY_VERIFIED') {
+      this.promoteFaithfullyFormalizedProof(projectId, call.input);
+    }
     if (exact && /['"]counterexample['"]\s*:\s*\{/.test(result.output)) this.persistCounterexample(projectId, branch, evidence, result.output);
     return { callId, evidenceId: evidence.id };
+  }
+
+  private promoteFaithfullyFormalizedProof(projectId: string, input: Record<string, unknown>): void {
+    const proofId = typeof input.proofId === 'string' ? input.proofId : '';
+    const formalizationOf = typeof input.formalizationOf === 'string' ? input.formalizationOf.trim() : '';
+    if (!proofId || !formalizationOf) return;
+    const proof = this.db.getProject(projectId, false).proofs.find((item) => item.id === proofId);
+    if (!proof || proof.theorem.trim() !== formalizationOf || !proof.independentlyReviewed) return;
+    if (proof.steps.length === 0 || proof.steps.some((step) => step.critical && step.status !== 'VALID')) return;
+    this.db.saveRecord('proofs', {
+      ...proof,
+      status: 'VERIFIED',
+      verificationStatus: 'formally-verified',
+      updatedAt: now(),
+    });
   }
 
   private persistBranches(projectId: string, session: ResearchSession, action: RoleAction): void {
@@ -267,8 +345,54 @@ export class ResearchOrchestrator {
     return available.length ? available[session.branchCursor % available.length] : null;
   }
 
+  private prepareSession(projectId: string, previous: ResearchSession | undefined, resumeRequested: boolean): ResearchSession {
+    if (!previous || previous.status === 'COMPLETE') return this.newSession(projectId);
+    const normalized: ResearchSession = {
+      ...previous,
+      cycleId: previous.cycleId || previous.id,
+      cycleIndex: Number.isInteger(previous.cycleIndex) ? previous.cycleIndex : 0,
+      cycleCheckpointStart: Number.isInteger(previous.cycleCheckpointStart) ? previous.cycleCheckpointStart : 0,
+    };
+    const completedCheckpointCycle = normalized.status === 'PAUSED' && normalized.nextStage === 'PAUSED';
+    if (resumeRequested && completedCheckpointCycle) {
+      return {
+        ...normalized,
+        cycleId: randomUUID(),
+        cycleIndex: normalized.cycleIndex + 1,
+        cycleCheckpointStart: normalized.checkpointCount,
+        status: 'RUNNING',
+        nextStage: 'EXPLORE',
+        completedAt: null,
+        failure: '',
+        pauseReason: '',
+        updatedAt: now(),
+      };
+    }
+    return { ...normalized, status: 'RUNNING', completedAt: null, failure: '', pauseReason: '', updatedAt: now() };
+  }
+
   private newSession(projectId: string): ResearchSession {
-    const timestamp = now(); return { id: randomUUID(), projectId, status: 'RUNNING', currentStage: 'INITIALIZE', nextStage: 'INITIALIZE', iteration: 0, actionCount: 0, checkpointCount: 0, activeBranchId: null, branchCursor: 0, startedAt: timestamp, updatedAt: timestamp, lastCheckpointAt: timestamp, completedAt: null, pauseReason: '', failure: '', totalTokenUsage: 0, totalElapsedMs: 0, conclusion: null };
+    const timestamp = now(); const sessionId = randomUUID();
+    return { id: sessionId, projectId, cycleId: randomUUID(), cycleIndex: 0, cycleCheckpointStart: 0, status: 'RUNNING', currentStage: 'INITIALIZE', nextStage: 'INITIALIZE', iteration: 0, actionCount: 0, checkpointCount: 0, activeBranchId: null, branchCursor: 0, startedAt: timestamp, updatedAt: timestamp, lastCheckpointAt: timestamp, completedAt: null, pauseReason: '', failure: '', totalTokenUsage: 0, totalElapsedMs: 0, conclusion: null };
+  }
+
+  private writeState(event: ResearchStateLogEntry['event'], session: ResearchSession, resumeRequested: boolean, agentLoopRunning: boolean): void {
+    const terminalCursor = session.nextStage === 'PAUSED' || session.nextStage === 'FAILED' || session.nextStage === 'COMPLETE';
+    this.logState({
+      timestamp: now(),
+      event,
+      project_id: session.projectId,
+      session_id: session.id,
+      cycle_id: session.cycleId,
+      cycle_index: session.cycleIndex,
+      paused: session.status === 'PAUSED',
+      cycle_completed: session.status === 'PAUSED' && session.nextStage === 'PAUSED',
+      pending_tasks: terminalCursor ? 0 : 1,
+      agent_loop_running: agentLoopRunning,
+      resume_requested: resumeRequested,
+      current_stage: session.currentStage,
+      next_stage: session.nextStage,
+    });
   }
 
   private activity(projectId: string, stage: Activity['stage'], title: string, status: Activity['status'], detail = ''): Activity {

@@ -3,6 +3,7 @@ import { join } from 'node:path';
 export interface PythonRuntimeResolution {
   source: 'bundled' | 'configured';
   executable: string;
+  argsPrefix: string[];
   displayPath: string;
 }
 
@@ -17,12 +18,16 @@ export function resolvePythonRuntime(input: {
     return {
       source: 'bundled',
       executable: join(input.resourcesPath, 'runtime', 'python', executableName),
+      argsPrefix: [],
       displayPath: `resources/runtime/python/${executableName}`,
     };
   }
+  const configured = input.configuredPath.trim() || 'python';
+  const launcher = configured.match(/^(py(?:\.exe)?)\s+(-\d+(?:\.\d+)?)$/i);
   return {
     source: 'configured',
-    executable: input.configuredPath.trim() || 'python',
-    displayPath: input.configuredPath.trim() || 'python',
+    executable: launcher?.[1] ?? configured,
+    argsPrefix: launcher ? [launcher[2]] : [],
+    displayPath: configured,
   };
 }

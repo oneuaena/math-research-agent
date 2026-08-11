@@ -17,7 +17,7 @@ const cleanEnv = {
 const projectId = '00000000-0000-4000-8000-000000000002';
 
 function invoke(name, input) {
-  const result = spawnSync(python, ['-I', worker], {
+  const result = spawnSync(python, ['-I', '-B', '-X', 'utf8', worker], {
     cwd: root,
     env: cleanEnv,
     encoding: 'utf8',
@@ -39,7 +39,7 @@ const z3 = JSON.parse(invoke('z3_check', { smt2: '(declare-const x Int) (assert 
 if (!capabilities.python.available || !capabilities.sympy.available) throw new Error('Bundled Python or SymPy is unavailable.');
 if (arithmetic.trim() !== '4') throw new Error(`Unexpected arithmetic result: ${arithmetic}`);
 if (factorization.replace(/\s/g, '') !== '(x-1)*(x+1)') throw new Error(`Unexpected factorization: ${factorization}`);
-if (z3.status !== 'sat') throw new Error(`Unexpected Z3 result: ${JSON.stringify(z3)}`);
+if (z3.status !== 'SAT') throw new Error(`Unexpected Z3 result: ${JSON.stringify(z3)}`);
 
 console.log(`BUNDLED_PYTHON_SMOKE_OK ${JSON.stringify({
   path: 'runtime/python/python.exe',

@@ -1,5 +1,5 @@
 import { _electron as electron, expect, test, type ElectronApplication, type Page } from '@playwright/test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -29,7 +29,7 @@ test('natural-language research persists specification, branches, proof critique
   await page.getByRole('button', { name: 'Run' }).click();
   await expect(page.getByText(/PAUSED · PAUSED/)).toBeVisible({ timeout: 45_000 });
   await expect(page.getByText('natural-language', { exact: true })).toBeVisible();
-  await expect(page.getByText('A natural-language specification was validated')).toBeVisible();
+  await expect(page.getByText('A natural-language specification was validated').first()).toBeVisible();
 
   await page.getByRole('button', { name: 'Research branches' }).click();
   await expect(page.getByRole('heading', { name: 'Research branches' })).toBeVisible();
@@ -38,12 +38,53 @@ test('natural-language research persists specification, branches, proof critique
   await expect(page.getByText('NOT VERIFIED').first()).toBeVisible();
   await expect(page.getByText(/REQUIRES_LEMMA|UNCERTAIN/).first()).toBeVisible();
 
+  await page.evaluate(async () => {
+    const settings = await window.research.settings.get();
+    await window.research.settings.save({ ...settings, checkpointEvery: 1, maxIterations: 500 });
+  });
+
   await app.close();
   await launch();
   await page.getByRole('heading', { name: 'Compactness route' }).click();
   await expect(page.getByRole('button', { name: 'Resume' })).toBeVisible();
-  await page.getByRole('button', { name: 'Resume' }).click();
-  await expect(page.getByText(/PAUSED · PAUSED/)).toBeVisible({ timeout: 45_000 });
+  let previous = await page.evaluate(async () => {
+    const project = (await window.research.projects.list()).find((item) => item.name === 'Compactness route')!;
+    const snapshot = await window.research.projects.get(project.id);
+    const session = snapshot.sessions.at(-1)!;
+    return { cycleId: session.cycleId, cycleIndex: session.cycleIndex, actionCount: session.actionCount, stepCount: snapshot.researchSteps.length };
+  });
+
+  for (let expectedCycle = 1; expectedCycle <= 5; expectedCycle += 1) {
+    await page.getByRole('button', { name: 'Resume' }).click();
+    await expect.poll(async () => page.evaluate(async () => {
+      const project = (await window.research.projects.list()).find((item) => item.name === 'Compactness route')!;
+      const snapshot = await window.research.projects.get(project.id);
+      const session = snapshot.sessions.at(-1)!;
+      return `${session.status}:${session.nextStage}:${session.cycleIndex}`;
+    }), { timeout: 45_000 }).toBe(`PAUSED:PAUSED:${expectedCycle}`);
+    const resumed = await page.evaluate(async () => {
+      const project = (await window.research.projects.list()).find((item) => item.name === 'Compactness route')!;
+      const snapshot = await window.research.projects.get(project.id);
+      const session = snapshot.sessions.at(-1)!;
+      return { cycleId: session.cycleId, cycleIndex: session.cycleIndex, actionCount: session.actionCount, stepCount: snapshot.researchSteps.length };
+    });
+    expect(resumed.cycleId).not.toBe(previous.cycleId);
+    expect(resumed.actionCount).toBeGreaterThan(previous.actionCount);
+    expect(resumed.stepCount).toBeGreaterThan(previous.stepCount);
+    previous = resumed;
+  }
+
+  const stateLog = readFileSync(join(userData, 'logs', 'research-state.jsonl'), 'utf8')
+    .trim().split(/\r?\n/).map((line) => JSON.parse(line) as Record<string, unknown>);
+  const completedCycles = stateLog.filter((entry) => entry.event === 'loop_stopped' && entry.cycle_completed === true);
+  expect(completedCycles).toHaveLength(6);
+  expect(completedCycles.at(-1)).toMatchObject({
+    cycle_index: 5,
+    paused: true,
+    pending_tasks: 0,
+    agent_loop_running: false,
+    resume_requested: true,
+  });
 });
 
 test('Chinese autonomous operation surface runs without English-only controls', async () => {
@@ -78,4 +119,31 @@ test('validated executable specification produces exact counterexample evidence'
   await page.getByRole('button', { name: 'Proof graph' }).click();
   await expect(page.getByText('Exact counterexample candidate')).toBeVisible();
   await expect(page.getByText('VERIFIED', { exact: true })).toBeVisible();
+});
+
+test('project chat persists and an imported document is indexed visibly', async () => {
+  await page.getByRole('button', { name: 'New project' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Project name').fill('Document chat');
+  await dialog.getByLabel('Statement').fill('Track the imported invariant.');
+  await dialog.getByRole('button', { name: 'Create project' }).click();
+  const documentPath = join(userData, 'reference.txt');
+  writeFileSync(documentPath, 'Reference marker: the amber invariant equals 31.\n\nThis is the final paragraph.', 'utf8');
+  await page.evaluate(async (path) => {
+    const project = (await window.research.projects.list()).find((item) => item.name === 'Document chat')!;
+    await window.research.documents.importPaths(project.id, [path]);
+  }, documentPath);
+  await page.reload();
+  await page.getByRole('heading', { name: 'Document chat' }).click();
+  await page.getByRole('button', { name: 'Papers & sources' }).click();
+  await expect(page.getByText(/Indexed · \d+ characters/)).toBeVisible();
+  await page.getByRole('button', { name: 'Research chat' }).click();
+  const composer = page.getByPlaceholder('Ask a question…');
+  await composer.fill('Remember this conversation turn.');
+  await composer.press('Enter');
+  await expect(page.getByText(/Local coordinator received: Remember this conversation turn/)).toBeVisible();
+  await expect.poll(async () => page.evaluate(async () => {
+    const project = (await window.research.projects.list()).find((item) => item.name === 'Document chat')!;
+    return (await window.research.projects.get(project.id)).messages.length;
+  })).toBe(2);
 });

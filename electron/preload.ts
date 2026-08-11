@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer } from 'electron';
+import { contextBridge, ipcRenderer, webUtils } from 'electron';
 import type { AgentEvent, CollectionName, CreateProjectInput, DesktopApi, ProviderSettings, ToolInvocation } from '../src/shared/types';
 
 const api: DesktopApi = {
@@ -25,7 +25,25 @@ const api: DesktopApi = {
     },
   },
   tools: { run: (invocation: ToolInvocation) => ipcRenderer.invoke('tools:run', invocation) },
-  documents: { import: (projectId: string) => ipcRenderer.invoke('documents:import', projectId) },
+  documents: {
+    import: (projectId: string) => ipcRenderer.invoke('documents:import', projectId),
+    importPaths: (projectId: string, paths: string[]) => ipcRenderer.invoke('documents:import-paths', projectId, paths),
+    importDropped: (projectId: string, files: File[]) => ipcRenderer.invoke('documents:import-paths', projectId, files.map((file) => webUtils.getPathForFile(file))),
+    search: (projectId: string, query: string, limit?: number) => ipcRenderer.invoke('documents:search', projectId, query, limit),
+  },
+  chat: {
+    send: (input) => ipcRenderer.invoke('chat:send', input),
+    stop: (projectId: string) => ipcRenderer.invoke('chat:stop', projectId),
+    regenerate: (projectId: string, messageId: string) => ipcRenderer.invoke('chat:regenerate', projectId, messageId),
+    onEvent: (callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, payload: Parameters<typeof callback>[0]) => callback(payload);
+      ipcRenderer.on('chat:event', listener);
+      return () => ipcRenderer.removeListener('chat:event', listener);
+    },
+  },
+  literature: {
+    search: (projectId: string, query: string) => ipcRenderer.invoke('literature:search', projectId, query),
+  },
   reports: {
     export: (projectId: string, format: 'markdown' | 'latex') => ipcRenderer.invoke('reports:export', projectId, format),
     exportEvidence: (projectId: string) => ipcRenderer.invoke('reports:export-evidence', projectId),
@@ -41,6 +59,7 @@ const api: DesktopApi = {
   system: {
     appVersion: () => ipcRenderer.invoke('system:app-version'),
     openPath: (path: string) => ipcRenderer.invoke('system:open-path', path),
+    openExternal: (url: string) => ipcRenderer.invoke('system:open-external', url),
     runtimeDiagnostics: () => ipcRenderer.invoke('system:runtime-diagnostics'),
   },
 };

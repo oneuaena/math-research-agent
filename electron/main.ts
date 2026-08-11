@@ -1,13 +1,18 @@
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { basename, extname, join } from 'node:path';
+import { copyFileSync, mkdirSync, statSync, writeFileSync } from 'node:fs';
+import { basename, extname, isAbsolute, join } from 'node:path';
 import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron';
-import type { Activity, CollectionName, CreateProjectInput, ProviderSettings, Source, ToolInvocation } from '../src/shared/types';
+import type { Activity, ChatSendInput, CollectionName, CreateProjectInput, ProviderSettings, Source, ToolInvocation } from '../src/shared/types';
 import { AgentCoordinator } from './agent-coordinator';
+import { ChatService } from './chat-service';
 import { CredentialStore } from './credentials';
 import { ResearchDatabase } from './database';
+import { extractDocument, INDEXABLE_DOCUMENT_EXTENSIONS } from './document-extractor';
+import { buildDocumentChunks } from './document-indexer';
+import { LiteratureSearchService } from './literature-search';
 import { ResponsesProvider } from './provider';
 import { buildLatexReport, buildMarkdownReport } from './report';
+import { ResearchStateLog } from './research-state-log';
 import { ToolRunner } from './tool-runner';
 
 let mainWindow: BrowserWindow | null = null;
@@ -15,8 +20,80 @@ let database: ResearchDatabase;
 let credentials: CredentialStore;
 let tools: ToolRunner;
 let agent: AgentCoordinator;
+let literature: LiteratureSearchService;
+let chat: ChatService;
 
 if (process.env.MRA_TEST_USER_DATA) app.setPath('userData', process.env.MRA_TEST_USER_DATA);
+
+async function indexExistingImportedDocuments(): Promise<void> {
+  for (const project of database.listProjects()) {
+    const snapshot = database.getProject(project.id, false);
+    for (const source of snapshot.sources) {
+      const extension = extname(source.path).toLowerCase();
+      if (source.type !== 'user-document' || !INDEXABLE_DOCUMENT_EXTENSIONS.has(extension)) continue;
+      if (source.extractionStatus === 'complete' && source.indexStatus === 'indexed' && (source.chunkCount ?? 0) > 0) continue;
+      try {
+        const extraction = await extractDocument(source.path);
+        const chunks = buildDocumentChunks(source, extraction);
+        database.replaceDocumentChunks(source.projectId, source.id, chunks);
+        database.saveRecord('sources', {
+          ...source,
+          excerpt: extraction.content.slice(0, 4_000),
+          content: undefined,
+          contentHash: extraction.contentHash,
+          contentCharacters: extraction.contentCharacters,
+          extractionStatus: extraction.extractionStatus,
+          extractionWarnings: extraction.extractionWarnings,
+          indexedAt: extraction.indexedAt,
+          documentType: extraction.documentType,
+          pageCount: extraction.pageCount,
+          chunkCount: chunks.length,
+          indexStatus: extraction.extractionStatus === 'complete' ? 'indexed' : 'unsupported',
+        });
+      } catch (error) {
+        database.replaceDocumentChunks(source.projectId, source.id, []);
+        database.saveRecord('sources', {
+          ...source,
+          extractionStatus: 'failed',
+          extractionWarnings: [error instanceof Error ? error.message : 'Document text extraction failed.'],
+          indexedAt: new Date().toISOString(),
+          indexStatus: 'failed',
+        });
+      }
+    }
+  }
+}
+
+async function importDocumentPaths(projectId: string, paths: string[]): Promise<ReturnType<ResearchDatabase['getProject']>> {
+  if (paths.length === 0 || paths.length > 20) throw new Error('Select between 1 and 20 documents.');
+  const destination = join(app.getPath('userData'), 'documents', projectId);
+  mkdirSync(destination, { recursive: true });
+  for (const sourcePath of paths) {
+    if (!isAbsolute(sourcePath)) throw new Error('Document path must be absolute.');
+    const extension = extname(sourcePath).toLowerCase();
+    if (!INDEXABLE_DOCUMENT_EXTENSIONS.has(extension)) throw new Error(`Unsupported document type: ${extension || 'unknown'}.`);
+    const size = statSync(sourcePath).size;
+    if (size > 50 * 1024 * 1024) throw new Error('Document exceeds the 50 MB import limit.');
+    const id = randomUUID();
+    const target = join(destination, `${id}${extension}`);
+    let extraction;
+    try { extraction = await extractDocument(sourcePath); }
+    catch (error) { throw new Error(`Could not read ${basename(sourcePath)}: ${error instanceof Error ? error.message : 'document extraction failed.'}`); }
+    const source: Source = {
+      id, projectId, type: 'user-document', title: basename(sourcePath, extension), authors: '', abstract: '',
+      path: target, tags: [], notes: '', excerpt: extraction.content.slice(0, 4_000),
+      contentHash: extraction.contentHash, contentCharacters: extraction.contentCharacters,
+      extractionStatus: extraction.extractionStatus, extractionWarnings: extraction.extractionWarnings,
+      indexedAt: extraction.indexedAt, documentType: extraction.documentType, pageCount: extraction.pageCount,
+      chunkCount: 0, indexStatus: 'pending', createdAt: new Date().toISOString(),
+    };
+    const chunks = buildDocumentChunks(source, extraction);
+    copyFileSync(sourcePath, target);
+    database.replaceDocumentChunks(projectId, id, chunks);
+    database.saveRecord('sources', { ...source, chunkCount: chunks.length, indexStatus: 'indexed' });
+  }
+  return database.getProject(projectId, false);
+}
 
 function createWindow(): void {
   mainWindow = new BrowserWindow({
@@ -74,30 +151,18 @@ function registerIpc(): void {
       title: 'Import research document',
       properties: ['openFile', 'multiSelections'],
       filters: [
-        { name: 'Research documents', extensions: ['pdf', 'txt', 'md', 'markdown', 'tex'] },
-        { name: 'All files', extensions: ['*'] },
+        { name: 'Research documents', extensions: ['docx', 'pdf', 'txt', 'md', 'markdown', 'tex'] },
       ],
     });
     if (selection.canceled || selection.filePaths.length === 0) return null;
-    const destination = join(app.getPath('userData'), 'documents', projectId);
-    mkdirSync(destination, { recursive: true });
-    for (const sourcePath of selection.filePaths) {
-      const size = statSync(sourcePath).size;
-      if (size > 50 * 1024 * 1024) throw new Error('Document exceeds the 50 MB import limit.');
-      const id = randomUUID();
-      const extension = extname(sourcePath).toLowerCase();
-      const target = join(destination, `${id}${extension}`);
-      copyFileSync(sourcePath, target);
-      const isText = ['.txt', '.md', '.markdown', '.tex'].includes(extension);
-      const excerpt = isText ? readFileSync(sourcePath, 'utf8').slice(0, 100_000) : '';
-      const record: Source = {
-        id, projectId, type: 'user-document', title: basename(sourcePath, extension), authors: '', abstract: '',
-        path: target, tags: [], notes: '', excerpt, createdAt: new Date().toISOString(),
-      };
-      database.saveRecord('sources', record);
-    }
-    return database.getProject(projectId, false);
+    return importDocumentPaths(projectId, selection.filePaths);
   });
+  ipcMain.handle('documents:import-paths', (_event, projectId: string, paths: string[]) => importDocumentPaths(projectId, paths));
+  ipcMain.handle('documents:search', (_event, projectId: string, query: string, limit?: number) => database.searchDocumentChunks(projectId, query, limit));
+  ipcMain.handle('chat:send', (_event, input: ChatSendInput) => chat.send(input));
+  ipcMain.handle('chat:stop', (_event, projectId: string) => chat.stop(projectId));
+  ipcMain.handle('chat:regenerate', (_event, projectId: string, messageId: string) => chat.regenerate(projectId, messageId));
+  ipcMain.handle('literature:search', (_event, projectId: string, query: string) => literature.search(projectId, query));
 
   ipcMain.handle('reports:export', async (_event, projectId: string, format: 'markdown' | 'latex') => {
     const snapshot = database.getProject(projectId, false);
@@ -137,15 +202,31 @@ function registerIpc(): void {
   });
   ipcMain.handle('system:app-version', () => app.getVersion());
   ipcMain.handle('system:open-path', (_event, path: string) => shell.openPath(path));
+  ipcMain.handle('system:open-external', (_event, url: string) => {
+    const target = new URL(url);
+    if (target.protocol !== 'https:' && target.protocol !== 'http:') throw new Error('Only HTTP(S) links can be opened.');
+    return shell.openExternal(target.toString());
+  });
   ipcMain.handle('system:runtime-diagnostics', () => tools.diagnostics());
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   database = new ResearchDatabase(join(app.getPath('userData'), 'research.sqlite3'));
   database.recoverInterruptedSessions();
+  await indexExistingImportedDocuments();
   credentials = new CredentialStore(database);
   tools = new ToolRunner(app.getPath('userData'), () => database.getSettings());
-  agent = new AgentCoordinator(database, credentials, tools, (event) => mainWindow?.webContents.send('agent:event', event));
+  literature = new LiteratureSearchService(database, undefined, join(app.getPath('userData'), 'literature-full-text'));
+  const researchStateLog = new ResearchStateLog(join(app.getPath('userData'), 'logs', 'research-state.jsonl'));
+  agent = new AgentCoordinator(
+    database,
+    credentials,
+    tools,
+    (event) => mainWindow?.webContents.send('agent:event', event),
+    (entry) => researchStateLog.write(entry),
+    literature,
+  );
+  chat = new ChatService(database, credentials, agent, literature, (event) => mainWindow?.webContents.send('chat:event', event));
   registerIpc();
   createWindow();
 });

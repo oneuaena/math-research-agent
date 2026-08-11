@@ -4,7 +4,13 @@ import type { ProofDocument } from './types';
 
 describe('v1 research contracts', () => {
   it('continues theoretical research when no executable form exists', () => {
-    expect(chooseNextStage('EXPLORE', { hasSpecification: true, executable: false, sourceCount: 0, proofHasGaps: true, verifiedCounterexample: false, proofVerified: false, cycle: 0 })).toBe('PATTERN_DISCOVERY');
+    expect(chooseNextStage('EXPLORE', { hasSpecification: true, executable: false, sourceCount: 0, proofHasGaps: true, verifiedCounterexample: false, proofVerified: false, cycle: 0, checkpointsInCycle: 0 })).toBe('PATTERN_DISCOVERY');
+  });
+
+  it('uses checkpoints from the active cycle instead of the cumulative session total', () => {
+    const context = { hasSpecification: true, executable: false, sourceCount: 0, proofHasGaps: true, verifiedCounterexample: false, proofVerified: false, cycle: 12 };
+    expect(chooseNextStage('CHECKPOINT', { ...context, checkpointsInCycle: 4 })).toBe('EXPLORE');
+    expect(chooseNextStage('CHECKPOINT', { ...context, checkpointsInCycle: 5 })).toBe('PAUSED');
   });
 
   it('rejects incomplete formalization payloads', () => {

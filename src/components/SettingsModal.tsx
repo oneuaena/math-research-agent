@@ -20,6 +20,7 @@ export function SettingsModal({ onClose }: { onClose(): void }) {
   }, []);
   if (!settings || !credential) return <Modal title={t(language, 'settings')} onClose={onClose}><div className="modal-loading">Loading…</div></Modal>;
   const update = <K extends keyof ProviderSettings>(field: K, value: ProviderSettings[K]) => setSettings((current) => current ? { ...current, [field]: value } : current);
+  const updateLiteratureProvider = (provider: keyof ProviderSettings['literatureProviders'], enabled: boolean) => setSettings((current) => current ? { ...current, literatureProviders: { ...current.literatureProviders, [provider]: enabled } } : current);
   const persist = async () => { setSettings(await window.research.settings.save(settings)); if (key.trim()) { setCredential(await window.research.settings.saveCredential(key)); setKey(''); } };
   const save = async (event: FormEvent) => { event.preventDefault(); await persist(); setDiagnostic(null); setStatus(language === 'zh' ? '已保存。' : 'Saved.'); };
   const test = async () => { setStatus(language === 'zh' ? '正在发送最小模型请求…' : 'Sending a minimal model request…'); setDiagnostic(null); await persist(); const result = await window.research.settings.testProvider(); setDiagnostic(result); setStatus(result.message); };
@@ -32,10 +33,16 @@ export function SettingsModal({ onClose }: { onClose(): void }) {
         <label className="field field-full"><span>Base URL</span><input value={settings.baseUrl} onChange={(e) => update('baseUrl', e.target.value)} disabled={settings.provider === 'local'} /></label>
         <label className="field field-full"><span>{t(language, 'apiKey')} · {credential.configured ? t(language, 'configured') : t(language, 'notConfigured')}</span><input type="password" value={key} onChange={(e) => setKey(e.target.value)} placeholder={credential.masked || (language === 'zh' ? '输入密钥' : 'Enter key')} disabled={settings.provider === 'local'} /></label>
       </div>
-      {settings.provider !== 'local' && <p className="privacy-note">A run sends the question, goal, background, known results, constraints, verified propositions, failed routes, and recent memory to this provider. Imported documents are not sent automatically.</p>}
+      {settings.provider !== 'local' && <p className="privacy-note">{language === 'zh' ? '研究运行会把问题、研究状态以及已提取的导入文档片段发送给所配置的模型 Provider；原始文件保留在本机。' : 'Research runs send the question, research state, and extracted imported-document chunks to the configured model provider; original files remain local.'}</p>}
       </section>
+      <section><h3>{language === 'zh' ? '文献检索' : 'Literature search'}</h3><div className="literature-settings-grid">
+        <label className="field"><span>{language === 'zh' ? '自动检索' : 'Search mode'}</span><select value={settings.literatureSearchMode} onChange={(event) => update('literatureSearchMode', event.target.value as ProviderSettings['literatureSearchMode'])}><option value="auto">{language === 'zh' ? '自动' : 'Automatic'}</option><option value="manual">{language === 'zh' ? '仅手动' : 'Manual only'}</option><option value="off">{language === 'zh' ? '关闭' : 'Off'}</option></select></label>
+        <div className="field"><span>{language === 'zh' ? '检索范围' : 'Search scope'}</span><div className="checkbox-line"><label><input type="checkbox" checked={settings.searchDomesticSources} onChange={(event) => update('searchDomesticSources', event.target.checked)} />{language === 'zh' ? '中文查询' : 'Chinese queries'}</label><label><input type="checkbox" checked={settings.searchInternationalSources} onChange={(event) => update('searchInternationalSources', event.target.checked)} />{language === 'zh' ? '国际来源' : 'International'}</label></div></div>
+        <div className="field field-full"><span>Providers</span><div className="checkbox-line provider-options">{(['arxiv', 'crossref', 'openalex', 'semantic-scholar', 'web'] as const).map((provider) => <label key={provider}><input type="checkbox" checked={settings.literatureProviders[provider]} onChange={(event) => updateLiteratureProvider(provider, event.target.checked)} />{provider === 'web' ? (language === 'zh' ? 'Web（未配置时会明确报错）' : 'Web (reports when unconfigured)') : provider}</label>)}</div></div>
+      </div></section>
       <section><h3>{t(language, 'runtime')}</h3><div className="settings-grid">
         <label className="field field-full"><span>{t(language, 'pythonExecutable')}</span><input value={runtimeDiagnostic?.source === 'bundled' ? `Bundled · ${runtimeDiagnostic.displayPath}` : settings.pythonPath} onChange={(e) => update('pythonPath', e.target.value)} disabled={runtimeDiagnostic?.source === 'bundled'} /></label>
+        <label className="field field-full"><span>{language === 'zh' ? 'Lean 4 / Lake 可执行文件（留空自动检测）' : 'Lean 4 / Lake executable (blank for auto-detect)'}</span><input value={settings.leanPath} onChange={(e) => update('leanPath', e.target.value)} placeholder={language === 'zh' ? '自动检测 ~/.elan/bin/lake' : 'Auto-detect ~/.elan/bin/lake'} /></label>
         <label className="field"><span>{language === 'zh' ? '每轮行动预算' : 'Actions per run'}</span><input type="number" min={1} max={500} value={settings.maxIterations} onChange={(e) => update('maxIterations', Number(e.target.value))} /></label>
         <label className="field"><span>{t(language, 'toolTimeout')}</span><input type="number" min={2} max={120} value={settings.maxToolSeconds} onChange={(e) => update('maxToolSeconds', Number(e.target.value))} /></label>
         <label className="field"><span>{language === 'zh' ? 'Provider HTTP 超时 · 秒' : 'Provider HTTP timeout · seconds'}</span><input type="number" min={120} max={600} value={settings.providerTimeoutSeconds} onChange={(e) => update('providerTimeoutSeconds', Number(e.target.value))} /></label>
@@ -51,7 +58,9 @@ export function SettingsModal({ onClose }: { onClose(): void }) {
           <dt>SymPy</dt><dd>{runtimeDiagnostic.sympy.available ? runtimeDiagnostic.sympy.version : 'Unavailable'}</dd>
           <dt>NumPy</dt><dd>{runtimeDiagnostic.numpy.available ? runtimeDiagnostic.numpy.version : 'Not bundled'}</dd>
           <dt>SciPy</dt><dd>{runtimeDiagnostic.scipy.available ? runtimeDiagnostic.scipy.version : 'Not bundled'}</dd>
-          <dt>Z3</dt><dd>{runtimeDiagnostic.z3.available ? `${runtimeDiagnostic.z3.version}${runtimeDiagnostic.z3.satTest ? ' · SAT OK' : ''}` : 'Not bundled'}</dd>
+          <dt>Z3</dt><dd>{runtimeDiagnostic.z3.available ? `${runtimeDiagnostic.z3.version}${runtimeDiagnostic.z3.satTest ? ' · SAT OK' : ''}${runtimeDiagnostic.z3.unsatTest ? ' · UNSAT OK' : ''}` : 'Not bundled'}</dd>
+          <dt>Lean 4</dt><dd>{runtimeDiagnostic.lean.available ? `${runtimeDiagnostic.lean.version || 'Available'}${runtimeDiagnostic.lean.kernelTest ? ' · KERNEL OK' : ''}${runtimeDiagnostic.lean.sorryRejected ? ' · SORRY REJECTED' : ''}` : 'Unavailable'}</dd>
+          <dt>Sage</dt><dd>{runtimeDiagnostic.sage.available ? runtimeDiagnostic.sage.version : 'Optional · unavailable'}</dd>
           <dt>Worker</dt><dd>{runtimeDiagnostic.workerOk ? 'OK' : 'FAILED'}</dd>
           <dt>Workspace</dt><dd>{runtimeDiagnostic.workspaceWritable ? 'Writable' : 'FAILED'}</dd>
           <dt>2 + 2</dt><dd>{runtimeDiagnostic.arithmetic.passed ? '4 · OK' : 'FAILED'}</dd>

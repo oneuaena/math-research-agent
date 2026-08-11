@@ -6,15 +6,19 @@ import type {
   Activity,
   CollectionName,
   CreateProjectInput,
+  DocumentChunk,
+  DocumentSearchResult,
   Project,
   ProjectSnapshot,
   ProviderSettings,
   ResearchSession,
 } from '../src/shared/types';
+import { cosineSimilarity, embedText, lexicalSimilarity, retrievalTerms } from '../src/shared/retrieval';
 
 const COLLECTIONS: CollectionName[] = [
   'blocks', 'nodes', 'propositions', 'experiments', 'memories', 'failedAttempts', 'sources', 'attacks', 'stressResults',
   'specifications', 'sessions', 'researchSteps', 'branches', 'evidence', 'graphEdges', 'proofs',
+  'conversations', 'messages', 'literature', 'noveltyChecks',
 ];
 
 const DEFAULT_SETTINGS: ProviderSettings = {
@@ -22,12 +26,17 @@ const DEFAULT_SETTINGS: ProviderSettings = {
   model: 'gpt-5.2',
   baseUrl: 'https://api.openai.com/v1',
   pythonPath: 'python',
+  leanPath: '',
   maxIterations: 40,
   maxToolSeconds: 20,
   providerTimeoutSeconds: 180,
   maxResearchMinutes: 60,
   checkpointEvery: 5,
   maxBranches: 4,
+  literatureSearchMode: 'auto',
+  literatureProviders: { arxiv: true, crossref: true, openalex: true, 'semantic-scholar': true, web: false },
+  searchDomesticSources: true,
+  searchInternationalSources: true,
 };
 
 type ProjectRow = {
@@ -124,6 +133,42 @@ export class ResearchDatabase {
         COMMIT;
       `);
     }
+    if (current < 4) {
+      this.db.exec(`
+        BEGIN;
+        CREATE TABLE document_chunks (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+          source_id TEXT NOT NULL,
+          filename TEXT NOT NULL,
+          document_type TEXT NOT NULL,
+          page_number INTEGER,
+          section_text TEXT NOT NULL DEFAULT '',
+          kind TEXT NOT NULL,
+          chunk_index INTEGER NOT NULL,
+          character_start INTEGER NOT NULL,
+          character_end INTEGER NOT NULL,
+          text_content TEXT NOT NULL,
+          embedding_json TEXT NOT NULL,
+          created_at TEXT NOT NULL
+        );
+        CREATE INDEX document_chunks_project_source ON document_chunks(project_id, source_id, chunk_index);
+        CREATE INDEX document_chunks_project_page ON document_chunks(project_id, page_number);
+        CREATE VIRTUAL TABLE document_chunks_fts USING fts5(filename, section_text, text_content, content='document_chunks', content_rowid='rowid');
+        CREATE TRIGGER document_chunks_ai AFTER INSERT ON document_chunks BEGIN
+          INSERT INTO document_chunks_fts(rowid, filename, section_text, text_content) VALUES (new.rowid, new.filename, new.section_text, new.text_content);
+        END;
+        CREATE TRIGGER document_chunks_ad AFTER DELETE ON document_chunks BEGIN
+          INSERT INTO document_chunks_fts(document_chunks_fts, rowid, filename, section_text, text_content) VALUES ('delete', old.rowid, old.filename, old.section_text, old.text_content);
+        END;
+        CREATE TRIGGER document_chunks_au AFTER UPDATE ON document_chunks BEGIN
+          INSERT INTO document_chunks_fts(document_chunks_fts, rowid, filename, section_text, text_content) VALUES ('delete', old.rowid, old.filename, old.section_text, old.text_content);
+          INSERT INTO document_chunks_fts(rowid, filename, section_text, text_content) VALUES (new.rowid, new.filename, new.section_text, new.text_content);
+        END;
+        INSERT INTO schema_migrations(version, applied_at) VALUES (4, datetime('now'));
+        COMMIT;
+      `);
+    }
   }
 
   private rowToProject(row: ProjectRow): Project {
@@ -193,6 +238,10 @@ export class ResearchDatabase {
       evidence: this.getRecords(id, 'evidence'),
       graphEdges: this.getRecords(id, 'graphEdges'),
       proofs: this.getRecords(id, 'proofs'),
+      conversations: this.getRecords(id, 'conversations'),
+      messages: this.getRecords(id, 'messages'),
+      literature: this.getRecords(id, 'literature'),
+      noveltyChecks: this.getRecords(id, 'noveltyChecks'),
       activities: this.listActivities(id),
     };
   }
@@ -239,7 +288,57 @@ export class ResearchDatabase {
   removeRecord(collection: CollectionName, id: string, projectId: string): ProjectSnapshot {
     if (!COLLECTIONS.includes(collection)) throw new Error('Unsupported record collection.');
     this.db.prepare('DELETE FROM records WHERE id = ? AND project_id = ? AND collection = ?').run(id, projectId, collection);
+    if (collection === 'sources') this.db.prepare('DELETE FROM document_chunks WHERE source_id = ? AND project_id = ?').run(id, projectId);
     return this.getProject(projectId, false);
+  }
+
+  replaceDocumentChunks(projectId: string, sourceId: string, chunks: DocumentChunk[]): void {
+    this.db.exec('BEGIN IMMEDIATE;');
+    try {
+      this.db.prepare('DELETE FROM document_chunks WHERE project_id = ? AND source_id = ?').run(projectId, sourceId);
+      const insert = this.db.prepare(`
+        INSERT INTO document_chunks(id, project_id, source_id, filename, document_type, page_number, section_text, kind, chunk_index, character_start, character_end, text_content, embedding_json, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      for (const chunk of chunks) {
+        insert.run(chunk.id, chunk.projectId, chunk.sourceId, chunk.filename, chunk.documentType, chunk.page, chunk.section, chunk.kind, chunk.chunkIndex, chunk.characterStart, chunk.characterEnd, chunk.text, JSON.stringify(chunk.embedding), chunk.createdAt);
+      }
+      this.db.exec('COMMIT;');
+    } catch (error) {
+      this.db.exec('ROLLBACK;');
+      throw error;
+    }
+  }
+
+  getDocumentChunks(projectId: string, sourceId?: string): DocumentChunk[] {
+    const rows = (sourceId
+      ? this.db.prepare('SELECT * FROM document_chunks WHERE project_id = ? AND source_id = ? ORDER BY chunk_index').all(projectId, sourceId)
+      : this.db.prepare('SELECT * FROM document_chunks WHERE project_id = ? ORDER BY source_id, chunk_index').all(projectId)) as unknown as DocumentChunkRow[];
+    return rows.map(rowToDocumentChunk);
+  }
+
+  searchDocumentChunks(projectId: string, query: string, limit = 8): DocumentSearchResult[] {
+    const requestedPage = pageFromQuery(query);
+    const allRows = this.db.prepare('SELECT * FROM document_chunks WHERE project_id = ? ORDER BY source_id, chunk_index LIMIT 5000').all(projectId) as unknown as DocumentChunkRow[];
+    const ftsScores = new Map<string, number>();
+    const match = retrievalTerms(query).filter((term) => /^[a-z0-9_]+$/.test(term)).slice(0, 12).map((term) => `"${term.replace(/"/g, '""')}"`).join(' OR ');
+    if (match) {
+      try {
+        const matches = this.db.prepare(`SELECT c.id, bm25(document_chunks_fts) AS rank FROM document_chunks_fts JOIN document_chunks c ON c.rowid = document_chunks_fts.rowid WHERE document_chunks_fts MATCH ? AND c.project_id = ? LIMIT 100`).all(match, projectId) as unknown as Array<{ id: string; rank: number }>;
+        for (const item of matches) ftsScores.set(item.id, 1 / (1 + Math.abs(item.rank)));
+      } catch {
+        // Keyword and local embedding scoring remain available when FTS cannot parse a query.
+      }
+    }
+    const queryEmbedding = embedText(query);
+    return allRows.map((row) => {
+      const chunk = rowToDocumentChunk(row);
+      const pageMatch = requestedPage === null || chunk.page === requestedPage;
+      const semantic = (cosineSimilarity(queryEmbedding, chunk.embedding) + 1) / 2;
+      const lexical = lexicalSimilarity(`${chunk.filename}\n${chunk.section}\n${chunk.text}`, query);
+      const score = (pageMatch ? 0.35 : requestedPage === null ? 0 : -1) + semantic * 0.3 + lexical * 0.25 + (ftsScores.get(chunk.id) ?? 0) * 0.1;
+      return { ...chunk, score };
+    }).filter((item) => requestedPage === null || item.page === requestedPage).sort((a, b) => b.score - a.score || a.chunkIndex - b.chunkIndex).slice(0, Math.max(1, Math.min(50, limit)));
   }
 
   private getRecords<T>(projectId: string, collection: CollectionName): T[] {
@@ -260,7 +359,10 @@ export class ResearchDatabase {
   getSettings(): ProviderSettings {
     const row = this.db.prepare("SELECT value FROM settings WHERE key = 'provider'").get() as { value: string } | undefined;
     if (!row) return DEFAULT_SETTINGS;
-    try { return { ...DEFAULT_SETTINGS, ...JSON.parse(row.value) as Partial<ProviderSettings> }; }
+    try {
+      const saved = JSON.parse(row.value) as Partial<ProviderSettings>;
+      return { ...DEFAULT_SETTINGS, ...saved, literatureProviders: { ...DEFAULT_SETTINGS.literatureProviders, ...saved.literatureProviders } };
+    }
     catch { return DEFAULT_SETTINGS; }
   }
 
@@ -270,12 +372,17 @@ export class ResearchDatabase {
       model: settings.model.trim() || DEFAULT_SETTINGS.model,
       baseUrl: settings.baseUrl.trim().replace(/\/$/, '') || DEFAULT_SETTINGS.baseUrl,
       pythonPath: settings.pythonPath.trim() || DEFAULT_SETTINGS.pythonPath,
+      leanPath: settings.leanPath?.trim() ?? DEFAULT_SETTINGS.leanPath,
       maxIterations: Math.min(500, Math.max(1, Math.round(settings.maxIterations))),
       maxToolSeconds: Math.min(120, Math.max(2, Math.round(settings.maxToolSeconds))),
       providerTimeoutSeconds: Math.min(600, Math.max(120, Math.round(settings.providerTimeoutSeconds || DEFAULT_SETTINGS.providerTimeoutSeconds))),
       maxResearchMinutes: Math.min(720, Math.max(1, Math.round(settings.maxResearchMinutes))),
       checkpointEvery: Math.min(100, Math.max(1, Math.round(settings.checkpointEvery))),
       maxBranches: Math.min(12, Math.max(1, Math.round(settings.maxBranches))),
+      literatureSearchMode: ['auto', 'manual', 'off'].includes(settings.literatureSearchMode) ? settings.literatureSearchMode : DEFAULT_SETTINGS.literatureSearchMode,
+      literatureProviders: { ...DEFAULT_SETTINGS.literatureProviders, ...settings.literatureProviders },
+      searchDomesticSources: settings.searchDomesticSources !== false,
+      searchInternationalSources: settings.searchInternationalSources !== false,
     };
     this.db.prepare("INSERT INTO settings(key, value) VALUES ('provider', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value").run(JSON.stringify(clean));
     return clean;
@@ -291,4 +398,28 @@ export class ResearchDatabase {
   }
 
   removeSecret(): void { this.db.prepare("DELETE FROM settings WHERE key = 'provider_secret'").run(); }
+
+  close(): void { this.db.close(); }
+}
+
+type DocumentChunkRow = {
+  id: string; project_id: string; source_id: string; filename: string; document_type: string; page_number: number | null;
+  section_text: string; kind: DocumentChunk['kind']; chunk_index: number; character_start: number; character_end: number;
+  text_content: string; embedding_json: string; created_at: string;
+};
+
+function rowToDocumentChunk(row: DocumentChunkRow): DocumentChunk {
+  let embedding: number[] = [];
+  try { embedding = JSON.parse(row.embedding_json) as number[]; } catch { embedding = embedText(row.text_content); }
+  return {
+    id: row.id, projectId: row.project_id, sourceId: row.source_id, filename: row.filename, documentType: row.document_type,
+    page: row.page_number, section: row.section_text, kind: row.kind, chunkIndex: row.chunk_index,
+    characterStart: row.character_start, characterEnd: row.character_end, text: row.text_content, embedding, createdAt: row.created_at,
+  };
+}
+
+function pageFromQuery(query: string): number | null {
+  const match = query.match(/\bpage\s*[:#]?\s*(\d{1,5})\b/i) ?? query.match(/第\s*(\d{1,5})\s*页/);
+  const value = match ? Number(match[1]) : NaN;
+  return Number.isInteger(value) && value > 0 ? value : null;
 }

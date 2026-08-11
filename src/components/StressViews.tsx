@@ -6,17 +6,20 @@ import { MathMarkdown } from './MathMarkdown';
 import { knownText, t } from '../i18n';
 
 const VERIFICATION_LABELS: Record<VerificationStatus, string> = {
+  'formally-verified': 'FORMALLY VERIFIED',
   'exactly-verified': 'EXACTLY VERIFIED',
   'computationally-verified': 'COMPUTATIONALLY VERIFIED',
   'symbolically-verified': 'SYMBOLICALLY VERIFIED',
+  'bounded-check': 'BOUNDED CHECK',
   'numerically-supported': 'NUMERICALLY SUPPORTED',
   'llm-assessed-only': 'LLM ASSESSED ONLY',
   'unverified': 'UNVERIFIED',
 };
 
 const VERIFICATION_LABELS_ZH: Record<VerificationStatus, string> = {
+  'formally-verified': '形式化验证',
   'exactly-verified': '精确验证', 'computationally-verified': '计算验证', 'symbolically-verified': '符号验证',
-  'numerically-supported': '数值支持', 'llm-assessed-only': '仅模型评估', 'unverified': '未验证',
+  'bounded-check': '有界检查', 'numerically-supported': '数值支持', 'llm-assessed-only': '仅模型评估', 'unverified': '未验证',
 };
 
 export function VerificationBadge({ status }: { status: VerificationStatus }) {

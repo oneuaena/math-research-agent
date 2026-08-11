@@ -1,6 +1,6 @@
 import { useState, type FormEvent } from 'react';
 import { CheckCircle2, File, FileDown, FlaskConical, Plus, RotateCcw, Trash2 } from 'lucide-react';
-import type { Experiment, FailedAttempt, Proposition, ResearchMemory, ToolName } from '../shared/types';
+import type { Experiment, FailedAttempt, Proposition, ResearchMemory, ToolName, VerificationStatus } from '../shared/types';
 import { useAppStore } from '../store';
 import { randomUUID } from '../utils';
 import { MathMarkdown } from './MathMarkdown';
@@ -46,19 +46,20 @@ export function ExperimentsView() {
   const [source, setSource] = useState('');
   const run = async (event: FormEvent) => {
     event.preventDefault(); setRunning(true); const now = new Date().toISOString();
-    const experiment: Experiment = { id: randomUUID(), projectId: snapshot.project.id, purpose, code: tool === 'run_python' ? source : '', tool, input: source, output: '', interpretation: '', relatedNodeId: null, status: 'running', durationMs: null, createdAt: now, updatedAt: now };
+    const experiment: Experiment = { id: randomUUID(), projectId: snapshot.project.id, purpose, code: tool === 'run_python' || tool === 'lean_check' ? source : '', tool, input: source, output: '', interpretation: '', relatedNodeId: null, status: 'running', durationMs: null, createdAt: now, updatedAt: now };
     await saveRecord('experiments', experiment);
-    const input = tool === 'run_python' ? { code: source } : tool === 'matrix_compute' ? { matrix: JSON.parse(source), operation: 'det' } : { expression: source, variable: 'x', symbols: ['x'] };
+    const input = tool === 'run_python' || tool === 'lean_check' ? { code: source } : tool === 'z3_check' ? { smt2: source } : tool === 'matrix_compute' ? { matrix: JSON.parse(source), operation: 'det' } : { expression: source, variable: 'x', symbols: ['x'] };
     const result = await window.research.tools.run({ projectId: snapshot.project.id, name: tool, purpose, input });
-    await saveRecord('experiments', { ...experiment, output: result.output || result.error || '', status: result.ok ? 'succeeded' : 'failed', durationMs: result.durationMs, updatedAt: new Date().toISOString() });
+    const verificationStatus: VerificationStatus = result.verificationStatus === 'FORMALLY_VERIFIED' ? 'formally-verified' : tool === 'z3_check' && result.ok ? 'bounded-check' : tool === 'run_python' && result.ok ? 'computationally-verified' : result.ok ? 'symbolically-verified' : 'unverified';
+    await saveRecord('experiments', { ...experiment, output: result.output || result.error || result.stderr || '', status: result.ok ? 'succeeded' : 'failed', durationMs: result.durationMs, environment: result.environment, verificationStatus, updatedAt: new Date().toISOString() });
     setRunning(false); setOpen(false); setPurpose(''); setSource('');
   };
   return <div className="collection-view"><header className="view-toolbar"><div><h1>Experiments</h1><span>{snapshot.experiments.length} runs</span></div><button className="button secondary compact" onClick={() => setOpen(true)}><Plus size={15} />Experiment</button></header>
     {snapshot.experiments.length === 0 ? <Empty title="No experiments" /> : <div className="record-list">{snapshot.experiments.map((item) => <article className="experiment-card" key={item.id}><div className="record-top"><span className="kind-label"><FlaskConical size={13} />{item.tool}</span><span className={`run-status ${item.status}`}>{item.status}</span></div><h2>{item.purpose}</h2><pre>{item.output || item.input}</pre><footer>{item.durationMs ? `${item.durationMs} ms` : '—'}</footer></article>)}</div>}
     {open && <Modal title="New experiment" onClose={() => setOpen(false)}><form className="single-form" onSubmit={(e) => { void run(e); }}>
       <label className="field"><span>Purpose</span><input value={purpose} onChange={(e) => setPurpose(e.target.value)} required /></label>
-      <label className="field"><span>Tool</span><select value={tool} onChange={(e) => setTool(e.target.value as ToolName)}><option value="symbolic_simplify">Symbolic simplify</option><option value="solve_equation">Solve equation</option><option value="differentiate">Differentiate</option><option value="integrate">Integrate</option><option value="matrix_compute">Matrix determinant</option><option value="run_python">Python</option></select></label>
-      <label className="field"><span>{tool === 'run_python' ? 'Code' : tool === 'matrix_compute' ? 'Matrix · JSON array' : 'Expression'}</span><textarea rows={8} value={source} onChange={(e) => setSource(e.target.value)} required /></label>
+      <label className="field"><span>Tool</span><select value={tool} onChange={(e) => setTool(e.target.value as ToolName)}><option value="symbolic_simplify">Symbolic simplify</option><option value="solve_equation">Solve equation</option><option value="differentiate">Differentiate</option><option value="integrate">Integrate</option><option value="matrix_compute">Matrix determinant</option><option value="run_python">Python</option><option value="z3_check">Z3 · SMT-LIB2</option><option value="lean_check">Lean 4 · kernel check</option></select></label>
+      <label className="field"><span>{tool === 'run_python' ? 'Python code' : tool === 'lean_check' ? 'Lean 4 source' : tool === 'z3_check' ? 'SMT-LIB2' : tool === 'matrix_compute' ? 'Matrix · JSON array' : 'Expression'}</span><textarea rows={8} value={source} onChange={(e) => setSource(e.target.value)} required /></label>
       <footer className="modal-actions"><button type="button" className="button secondary" onClick={() => setOpen(false)}>Cancel</button><button className="button primary" disabled={running}>{running ? 'Running…' : 'Run'}</button></footer>
     </form></Modal>}
   </div>;
@@ -67,8 +68,14 @@ export function ExperimentsView() {
 export function PapersView() {
   const snapshot = useAppStore((state) => state.snapshot)!;
   const importDocuments = useAppStore((state) => state.importDocuments);
-  return <div className="collection-view"><header className="view-toolbar"><div><h1>Papers & sources</h1><span>{snapshot.sources.length} sources</span></div><button className="button secondary compact" onClick={() => void importDocuments()}><Plus size={15} />Import</button></header>
-    {snapshot.sources.length === 0 ? <Empty title="No sources" /> : <div className="source-list">{snapshot.sources.map((source) => <article className="source-card" key={source.id} onClick={() => void window.research.system.openPath(source.path)}><File size={17} /><div><h3>{source.title}</h3><span>{source.type} · {source.path.split(/[\\/]/).pop()}</span></div></article>)}</div>}
+  const language = useAppStore((state) => state.language);
+  const localSources = snapshot.sources.filter((source) => source.type === 'user-document');
+  const openSource = (path: string, url?: string) => url ? window.research.system.openExternal(url) : window.research.system.openPath(path);
+  return <div className="collection-view"><header className="view-toolbar"><div><h1>{language === 'zh' ? '论文与来源' : 'Papers & sources'}</h1><span>{snapshot.sources.length} {language === 'zh' ? '个来源' : 'sources'}</span></div><button className="button secondary compact" onClick={() => void importDocuments()}><Plus size={15} />{language === 'zh' ? '导入' : 'Import'}</button></header>
+    {snapshot.sources.length === 0 ? <Empty title={language === 'zh' ? '暂无来源' : 'No sources'} /> : <div className="source-sections">
+      {localSources.length > 0 && <section><h2>{language === 'zh' ? '导入文档' : 'Imported documents'}</h2><div className="source-list">{localSources.map((source) => <article className="source-card" key={source.id} onClick={() => void openSource(source.path)}><File size={17} /><div><h3>{source.title}</h3><span>{source.documentType?.toUpperCase()} · {source.pageCount ? `${source.pageCount} pages · ` : ''}${source.chunkCount ?? 0} chunks</span><span className={`source-index-status ${source.extractionStatus ?? 'unsupported'}`}>{source.extractionStatus === 'complete' ? (language === 'zh' ? `已读取 · ${(source.contentCharacters ?? source.excerpt.length).toLocaleString()} 字符` : `Indexed · ${(source.contentCharacters ?? source.excerpt.length).toLocaleString()} characters`) : source.extractionStatus === 'failed' ? (language === 'zh' ? '读取失败' : 'Index failed') : (language === 'zh' ? '未提取正文' : 'Text not extracted')}</span></div></article>)}</div></section>}
+      {snapshot.literature.length > 0 && <section><h2>{language === 'zh' ? '检索文献' : 'Retrieved literature'}</h2><div className="source-list">{snapshot.literature.slice().reverse().map((record) => <article className="source-card literature-card" key={record.id} onClick={() => record.url ? void openSource('', record.url) : undefined}><File size={17} /><div><h3>{record.title}</h3><span>{record.authors.join(', ') || (language === 'zh' ? '作者未知' : 'Authors unknown')} · {record.year ?? '—'} · {record.provider}</span><span className="source-index-status complete">{record.doi ? `DOI ${record.doi}` : record.arxivId ? `arXiv ${record.arxivId}` : record.verificationStatus}</span></div></article>)}</div></section>}
+    </div>}
   </div>;
 }
 

@@ -1,7 +1,7 @@
 import { create } from 'zustand';
-import type { AgentEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot } from './shared/types';
+import type { AgentEvent, ChatEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot } from './shared/types';
 
-export type WorkspaceView = 'research' | 'branches' | 'proofs' | 'result' | 'attacks' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
+export type WorkspaceView = 'chat' | 'research' | 'branches' | 'proofs' | 'result' | 'attacks' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
 
 interface AppState {
   projects: Project[];
@@ -11,6 +11,7 @@ interface AppState {
   running: boolean;
   stage: AgentEvent['stage'];
   loading: boolean;
+  chatSending: boolean;
   error: string | null;
   theme: 'dark' | 'light';
   language: 'zh' | 'en';
@@ -29,7 +30,12 @@ interface AppState {
   pauseAgent(): Promise<void>;
   stopAgent(): Promise<void>;
   handleAgentEvent(event: AgentEvent): void;
-  importDocuments(): Promise<void>;
+  handleChatEvent(event: ChatEvent): void;
+  sendChat(content: string, attachmentSourceIds?: string[]): Promise<void>;
+  stopChat(): Promise<void>;
+  regenerateChat(messageId: string): Promise<void>;
+  importDocuments(stayInView?: boolean): Promise<string[]>;
+  importDropped(files: File[]): Promise<string[]>;
   toggleTheme(): void;
   toggleLanguage(): void;
   clearError(): void;
@@ -45,6 +51,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   running: false,
   stage: 'IDLE',
   loading: true,
+  chatSending: false,
   error: null,
   theme: (localStorage.getItem('mra-theme') === 'light' ? 'light' : 'dark'),
   language: (localStorage.getItem('mra-language') === 'en' ? 'en' : 'zh'),
@@ -99,7 +106,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   async resumeAgent() {
     const id = get().snapshot?.project.id;
     if (!id) return;
-    set({ running: true, stage: get().snapshot?.sessions.at(-1)?.nextStage ?? 'INITIALIZE', error: null });
+    const nextStage = get().snapshot?.sessions.at(-1)?.nextStage;
+    set({ running: true, stage: nextStage === 'PAUSED' ? 'EXPLORE' : nextStage ?? 'INITIALIZE', error: null });
     try { await window.research.agent.resume(id); }
     catch (error) { set({ error: message(error), running: false, stage: 'IDLE' }); }
   },
@@ -122,13 +130,61 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ running: event.running, stage: event.stage, ...(event.stage === 'COMPLETE' && !event.running && get().snapshot?.project.mode === 'stress-test' ? { view: 'result' as WorkspaceView } : {}) });
     if (event.activity && event.activity.status !== 'running') void get().refresh();
   },
-  async importDocuments() {
+  handleChatEvent(event) {
+    if (event.projectId !== get().snapshot?.project.id) return;
+    const snapshot = get().snapshot!;
+    const exists = snapshot.messages.some((message) => message.id === event.message.id);
+    const messages = exists ? snapshot.messages.map((message) => message.id === event.message.id ? event.message : message) : [...snapshot.messages, event.message];
+    set({ snapshot: { ...snapshot, messages }, chatSending: event.message.status === 'pending' || event.message.status === 'streaming' });
+    if (event.message.status === 'pending') void get().refresh();
+    if (['completed', 'stopped', 'failed'].includes(event.message.status)) void get().refresh();
+  },
+  async sendChat(content, attachmentSourceIds = []) {
+    const snapshot = get().snapshot;
+    if (!snapshot) return;
+    set({ chatSending: true, error: null });
+    try {
+      await window.research.chat.send({ projectId: snapshot.project.id, conversationId: snapshot.conversations.at(-1)?.id, content, attachmentSourceIds });
+      await get().refresh();
+    } catch (error) { set({ error: message(error) }); }
+    finally { set({ chatSending: false }); }
+  },
+  async stopChat() {
+    const projectId = get().snapshot?.project.id;
+    if (!projectId) return;
+    await window.research.chat.stop(projectId);
+    set({ chatSending: false });
+  },
+  async regenerateChat(messageId) {
+    const projectId = get().snapshot?.project.id;
+    if (!projectId) return;
+    set({ chatSending: true, error: null });
+    try { await window.research.chat.regenerate(projectId, messageId); await get().refresh(); }
+    catch (error) { set({ error: message(error) }); }
+    finally { set({ chatSending: false }); }
+  },
+  async importDocuments(stayInView = false) {
     const id = get().snapshot?.project.id;
-    if (!id) return;
+    if (!id) return [];
+    const before = new Set(get().snapshot?.sources.map((source) => source.id));
     try {
       const snapshot = await window.research.documents.import(id);
-      if (snapshot) set({ snapshot, view: 'papers' });
+      if (snapshot) {
+        set({ snapshot, ...(stayInView ? {} : { view: 'papers' as WorkspaceView }) });
+        return snapshot.sources.filter((source) => !before.has(source.id)).map((source) => source.id);
+      }
     } catch (error) { set({ error: message(error) }); }
+    return [];
+  },
+  async importDropped(files) {
+    const id = get().snapshot?.project.id;
+    if (!id || files.length === 0) return [];
+    const before = new Set(get().snapshot?.sources.map((source) => source.id));
+    try {
+      const snapshot = await window.research.documents.importDropped(id, files);
+      set({ snapshot });
+      return snapshot.sources.filter((source) => !before.has(source.id)).map((source) => source.id);
+    } catch (error) { set({ error: message(error) }); return []; }
   },
   toggleTheme() {
     const theme = get().theme === 'dark' ? 'light' : 'dark';

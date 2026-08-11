@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import io
 import json
 import math
 import shutil
@@ -10,9 +12,27 @@ import sys
 import traceback
 
 
+if hasattr(sys.stdin, "reconfigure"):
+    sys.stdin.reconfigure(encoding="utf-8", errors="strict")
+    sys.stdout.reconfigure(encoding="utf-8", errors="strict")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+
 ALLOWED_IMPORTS = {"math", "sympy", "numpy", "scipy"}
 BLOCKED_NAMES = {"open", "exec", "eval", "compile", "input", "help", "breakpoint", "__import__"}
 BLOCKED_ATTRS = {"system", "popen", "spawn", "fork", "remove", "unlink", "rmdir", "chdir", "socket", "connect"}
+MAX_CAPTURE_CHARACTERS = 2_000_000
+
+
+class OutputLimitExceeded(RuntimeError):
+    """Raised before model-generated output can exhaust worker memory."""
+
+
+class LimitedTextBuffer(io.StringIO):
+    def write(self, value: str) -> int:
+        if self.tell() + len(value) > MAX_CAPTURE_CHARACTERS:
+            raise OutputLimitExceeded(f"Program output exceeded {MAX_CAPTURE_CHARACTERS:,} characters.")
+        return super().write(value)
 
 
 def validate_code(source: str) -> None:
@@ -30,11 +50,23 @@ def validate_code(source: str) -> None:
             raise ValueError("Dunder attribute access is not allowed.")
 
 
-def run_python(data: dict) -> str:
+def run_python(data: dict) -> dict:
     source = str(data.get("code", ""))
     if len(source) > 20000:
         raise ValueError("Code exceeds the 20,000 character limit.")
-    validate_code(source)
+    try:
+        validate_code(source)
+    except Exception as exc:
+        return {
+            "ok": False,
+            "output": "",
+            "stdout": "",
+            "stderr": traceback.format_exc(),
+            "error": str(exc),
+            "error_type": "VALIDATION_ERROR",
+            "exit_code": 1,
+            "verification_status": "PROGRAM_FAILURE",
+        }
     def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name.split(".")[0] not in ALLOWED_IMPORTS:
             raise ImportError(f"Import not allowed: {name}")
@@ -48,9 +80,48 @@ def run_python(data: dict) -> str:
         "tuple": tuple, "zip": zip, "__import__": safe_import,
     }
     namespace = {"__builtins__": safe_builtins, "math": math}
-    exec(compile(source, "<research-experiment>", "exec"), namespace, namespace)
-    result = namespace.get("result")
-    return str(result) if result is not None else "Completed. Set `result` to return a value."
+    captured_stdout = LimitedTextBuffer()
+    captured_stderr = LimitedTextBuffer()
+    try:
+        with contextlib.redirect_stdout(captured_stdout), contextlib.redirect_stderr(captured_stderr):
+            exec(compile(source, "<research-experiment>", "exec"), namespace, namespace)
+        result = namespace.get("result")
+        stdout = captured_stdout.getvalue()
+        output = str(result) if result is not None else stdout.rstrip() or "Completed. Set `result` to return a value."
+        return {
+            "ok": True,
+            "output": output,
+            "stdout": stdout,
+            "stderr": captured_stderr.getvalue(),
+            "error_type": "NONE",
+            "exit_code": 0,
+            "verification_status": "SUCCESS",
+            "verification_level": "BOUNDED_CHECK",
+        }
+    except OutputLimitExceeded as exc:
+        return {
+            "ok": False,
+            "output": "",
+            "stdout": captured_stdout.getvalue(),
+            "stderr": captured_stderr.getvalue(),
+            "error": str(exc),
+            "error_type": "OUTPUT_LIMIT",
+            "exit_code": 1,
+            "verification_status": "PROGRAM_FAILURE",
+        }
+    except Exception as exc:
+        technical = traceback.format_exc()
+        stderr = captured_stderr.getvalue()
+        return {
+            "ok": False,
+            "output": "",
+            "stdout": captured_stdout.getvalue(),
+            "stderr": f"{stderr}{technical}",
+            "error": str(exc),
+            "error_type": "PROGRAM_ERROR",
+            "exit_code": 1,
+            "verification_status": "PROGRAM_FAILURE",
+        }
 
 
 def symbolic(tool: str, data: dict) -> str:
@@ -102,19 +173,65 @@ def capabilities() -> str:
     return json.dumps(report, ensure_ascii=False)
 
 
-def z3_check(data: dict) -> str:
+def z3_check(data: dict) -> dict:
     try:
         import z3
     except Exception as exc:
-        raise ValueError("Z3 is optional and is not installed in the configured Python environment.") from exc
+        return {
+            "ok": False,
+            "output": "",
+            "stdout": "",
+            "stderr": traceback.format_exc(),
+            "error": f"Z3 is unavailable: {exc}",
+            "error_type": "UNAVAILABLE",
+            "exit_code": 1,
+            "verification_status": "TOOL_FAILURE",
+            "verification_level": "UNKNOWN",
+        }
     smt2 = str(data.get("smt2", ""))
-    if not smt2 or len(smt2) > 50000:
-        raise ValueError("Provide an SMT-LIB2 script no longer than 50,000 characters.")
+    if not smt2 or len(smt2) > 200000:
+        raise ValueError("Provide an SMT-LIB2 script no longer than 200,000 characters.")
+    timeout_ms = max(1, min(120000, int(data.get("timeoutMs", 10000))))
     solver = z3.Solver()
+    solver.set(timeout=timeout_ms)
     solver.add(z3.parse_smt2_string(smt2))
     status = solver.check()
     model = str(solver.model()) if status == z3.sat else ""
-    return json.dumps({"status": str(status), "model": model}, ensure_ascii=False)
+    reason_unknown = solver.reason_unknown() if status == z3.unknown else ""
+    normalized = "SAT" if status == z3.sat else "UNSAT" if status == z3.unsat else "UNKNOWN"
+    output = json.dumps({
+        "status": normalized,
+        "model": model,
+        "reason_unknown": reason_unknown,
+        "timeout_ms": timeout_ms,
+        "bounded": True,
+    }, ensure_ascii=False)
+    return {
+        "ok": True,
+        "output": output,
+        "stdout": "",
+        "stderr": "",
+        "error_type": "NONE",
+        "exit_code": 0,
+        "verification_status": normalized,
+        "verification_level": normalized,
+        "reason_unknown": reason_unknown,
+    }
+
+
+def successful(output: str, verification_status: str = "SUCCESS", verification_level: str | None = None) -> dict:
+    response = {
+        "ok": True,
+        "output": output,
+        "stdout": "",
+        "stderr": "",
+        "error_type": "NONE",
+        "exit_code": 0,
+        "verification_status": verification_status,
+    }
+    if verification_level:
+        response["verification_level"] = verification_level
+    return response
 
 
 def main() -> None:
@@ -122,23 +239,34 @@ def main() -> None:
     tool = request.get("name")
     data = request.get("input", {})
     if tool == "run_python":
-        output = run_python(data)
+        response = run_python(data)
     elif tool == "capability_check":
-        output = capabilities()
+        response = successful(capabilities())
     elif tool == "z3_check":
-        output = z3_check(data)
+        response = z3_check(data)
     else:
-        output = symbolic(tool, data)
+        response = successful(symbolic(tool, data), verification_level="SYMBOLIC_CHECK")
     try:
         import sympy as sp
         environment = f"Python {sys.version.split()[0]}; SymPy {sp.__version__}; isolated worker"
     except Exception:
         environment = f"Python {sys.version.split()[0]}; isolated worker"
-    print(json.dumps({"ok": True, "output": output, "environment": environment}, ensure_ascii=False))
+    response.update({"protocol_version": 2, "environment": environment})
+    print(json.dumps(response, ensure_ascii=False))
 
 
 if __name__ == "__main__":
     try:
         main()
     except Exception as exc:
-        print(json.dumps({"ok": False, "error": str(exc), "technical": traceback.format_exc(limit=3)}, ensure_ascii=False))
+        print(json.dumps({
+            "protocol_version": 2,
+            "ok": False,
+            "output": "",
+            "stdout": "",
+            "stderr": traceback.format_exc(),
+            "error": str(exc),
+            "error_type": "PROGRAM_ERROR",
+            "exit_code": 1,
+            "verification_status": "PROGRAM_FAILURE",
+        }, ensure_ascii=False))

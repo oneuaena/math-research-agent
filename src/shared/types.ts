@@ -20,7 +20,12 @@ export type GraphEdgeKind = 'IMPLIES' | 'DEPENDS_ON' | 'SUPPORTS' | 'REFUTES' | 
 export type ResearchRole = 'research-planner' | 'explorer' | 'experimental-mathematician' | 'lemma-generator' | 'proof-builder' | 'skeptic' | 'independent-verifier' | 'research-synthesizer';
 export type ProofStepStatus = 'VALID' | 'INVALID' | 'UNCERTAIN' | 'REQUIRES_LEMMA' | 'REQUIRES_COMPUTATION' | 'REQUIRES_FORMALIZATION';
 
-export type VerificationStatus = 'exactly-verified' | 'computationally-verified' | 'symbolically-verified' | 'numerically-supported' | 'llm-assessed-only' | 'unverified';
+export type VerificationStatus = 'formally-verified' | 'exactly-verified' | 'computationally-verified' | 'symbolically-verified'
+  | 'bounded-check' | 'numerically-supported' | 'llm-assessed-only' | 'unverified';
+
+export type MathematicalVerificationLevel = 'CONJECTURE' | 'UNCERTAIN' | 'HEURISTIC' | 'NUMERICAL_EVIDENCE'
+  | 'BOUNDED_CHECK' | 'SYMBOLIC_CHECK' | 'SAT' | 'UNSAT' | 'UNKNOWN' | 'REQUIRES_LEMMA'
+  | 'REQUIRES_FORMALIZATION' | 'FORMALLY_VERIFIED' | 'REFUTED';
 
 export type BlockKind = 'text' | 'math' | 'theorem' | 'lemma' | 'definition' | 'proof' | 'experiment' | 'code' | 'source' | 'agent-note';
 
@@ -147,6 +152,7 @@ export interface ResearchEvidence {
   title: string;
   content: string;
   verificationStatus: VerificationStatus;
+  verificationLevel?: MathematicalVerificationLevel;
   sourceIds: string[];
   experimentIds: string[];
   reproducible: boolean;
@@ -181,6 +187,9 @@ export interface ResearchStep {
 export interface ResearchSession {
   id: string;
   projectId: string;
+  cycleId: string;
+  cycleIndex: number;
+  cycleCheckpointStart: number;
   status: 'RUNNING' | 'PAUSED' | 'COMPLETE' | 'FAILED';
   currentStage: AgentStage;
   nextStage: AgentStage;
@@ -251,7 +260,9 @@ export interface RuntimeDiagnostics {
   sympy: { available: boolean; version: string };
   numpy: { available: boolean; version: string };
   scipy: { available: boolean; version: string };
-  z3: { available: boolean; version: string; satTest: boolean | null };
+  z3: { available: boolean; version: string; satTest: boolean | null; unsatTest: boolean | null };
+  lean: { available: boolean; version: string; kernelTest: boolean | null; sorryRejected: boolean | null };
+  sage: { available: boolean; version: string };
   arithmetic: { passed: boolean; output: string };
   factorization: { passed: boolean; output: string };
   error: string;
@@ -298,7 +309,7 @@ export interface Experiment {
 export interface ResearchMemory {
   id: string;
   projectId: string;
-  category: 'result' | 'decision' | 'failure' | 'issue' | 'reference' | 'experiment';
+  category: 'result' | 'decision' | 'failure' | 'issue' | 'reference' | 'experiment' | 'conversation' | 'literature' | 'open-question' | 'source-summary';
   title: string;
   content: string;
   relatedNodeIds: string[];
@@ -322,7 +333,7 @@ export interface FailedAttempt {
 export interface Source {
   id: string;
   projectId: string;
-  type: 'user-document' | 'web' | 'agent-generated' | 'tool-generated';
+  type: 'user-document' | 'web' | 'agent-generated' | 'tool-generated' | 'paper' | 'webpage' | 'arxiv' | 'journal' | 'research-note';
   title: string;
   authors: string;
   abstract: string;
@@ -330,7 +341,137 @@ export interface Source {
   tags: string[];
   notes: string;
   excerpt: string;
+  content?: string;
+  contentHash?: string;
+  contentCharacters?: number;
+  extractionStatus?: 'complete' | 'unsupported' | 'failed';
+  extractionWarnings?: string[];
+  indexedAt?: string;
+  documentType?: 'txt' | 'md' | 'tex' | 'docx' | 'pdf' | 'html' | 'abstract';
+  pageCount?: number;
+  chunkCount?: number;
+  indexStatus?: 'pending' | 'indexed' | 'failed' | 'unsupported';
+  doi?: string;
+  url?: string;
+  arxivId?: string;
+  year?: number | null;
+  venue?: string;
+  provider?: LiteratureProviderName;
+  retrievalTime?: string;
+  literatureVerificationStatus?: 'VERIFIED_METADATA' | 'UNVERIFIED';
   createdAt: string;
+}
+
+export interface DocumentChunk {
+  id: string;
+  projectId: string;
+  sourceId: string;
+  filename: string;
+  documentType: string;
+  page: number | null;
+  section: string;
+  kind: 'title' | 'section' | 'paragraph' | 'list' | 'table' | 'equation' | 'proof' | 'page';
+  chunkIndex: number;
+  characterStart: number;
+  characterEnd: number;
+  text: string;
+  embedding: number[];
+  createdAt: string;
+}
+
+export interface DocumentSearchResult extends DocumentChunk {
+  score: number;
+}
+
+export type ChatTaskRoute = 'CHAT' | 'QUICK_ANALYSIS' | 'DOCUMENT_ANALYSIS' | 'LITERATURE_SEARCH' | 'DEEP_RESEARCH';
+export type ChatMessageStatus = 'pending' | 'streaming' | 'completed' | 'stopped' | 'failed';
+
+export interface Conversation {
+  id: string;
+  projectId: string;
+  title: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MessageCitation {
+  sourceId: string;
+  chunkId: string | null;
+  title: string;
+  page: number | null;
+  section: string;
+  url?: string;
+  doi?: string;
+}
+
+export interface ConversationMessage {
+  id: string;
+  projectId: string;
+  conversationId: string;
+  role: 'user' | 'assistant' | 'system';
+  content: string;
+  route: ChatTaskRoute;
+  status: ChatMessageStatus;
+  attachmentSourceIds: string[];
+  citations: MessageCitation[];
+  parentMessageId: string | null;
+  regeneratedFromId: string | null;
+  error: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export type LiteratureProviderName = 'arxiv' | 'crossref' | 'openalex' | 'semantic-scholar' | 'web';
+
+export interface LiteratureRecord {
+  id: string;
+  projectId: string;
+  sourceId: string;
+  title: string;
+  authors: string[];
+  year: number | null;
+  venue: string;
+  doi: string;
+  url: string;
+  fullTextUrl?: string;
+  arxivId: string;
+  abstract: string;
+  provider: LiteratureProviderName;
+  query: string;
+  retrievalTime: string;
+  verificationStatus: 'VERIFIED_METADATA' | 'UNVERIFIED';
+  relevanceScore: number;
+}
+
+export interface NoveltyCheck {
+  id: string;
+  projectId: string;
+  claim: string;
+  status: 'KNOWN' | 'PARTIALLY_KNOWN' | 'POSSIBLY_NOVEL' | 'UNKNOWN';
+  literatureIds: string[];
+  summary: string;
+  searchedAt: string;
+}
+
+export interface LiteratureSearchResult {
+  queries: string[];
+  records: LiteratureRecord[];
+  providerErrors: Array<{ provider: LiteratureProviderName; message: string }>;
+}
+
+export interface ChatSendInput {
+  projectId: string;
+  conversationId?: string;
+  content: string;
+  attachmentSourceIds?: string[];
+  regenerateFromId?: string;
+}
+
+export interface ChatEvent {
+  projectId: string;
+  conversationId: string;
+  message: ConversationMessage;
+  delta?: string;
 }
 
 export interface AttackRecord {
@@ -411,6 +552,10 @@ export interface ProjectSnapshot {
   evidence: ResearchEvidence[];
   graphEdges: GraphEdge[];
   proofs: ProofDocument[];
+  conversations: Conversation[];
+  messages: ConversationMessage[];
+  literature: LiteratureRecord[];
+  noveltyChecks: NoveltyCheck[];
   activities: Activity[];
 }
 
@@ -434,12 +579,17 @@ export interface ProviderSettings {
   model: string;
   baseUrl: string;
   pythonPath: string;
+  leanPath: string;
   maxIterations: number;
   maxToolSeconds: number;
   providerTimeoutSeconds: number;
   maxResearchMinutes: number;
   checkpointEvery: number;
   maxBranches: number;
+  literatureSearchMode: 'auto' | 'manual' | 'off';
+  literatureProviders: Record<LiteratureProviderName, boolean>;
+  searchDomesticSources: boolean;
+  searchInternationalSources: boolean;
 }
 
 export type ProviderErrorType = 'AUTH_FAILED' | 'INSUFFICIENT_BALANCE' | 'BAD_REQUEST' | 'RATE_LIMITED' | 'SERVER_ERROR'
@@ -460,7 +610,8 @@ export interface ProviderConnectionResult {
 export interface CredentialStatus { configured: boolean; masked: string; secureStorage: boolean; }
 
 export type CollectionName = 'blocks' | 'nodes' | 'propositions' | 'experiments' | 'memories' | 'failedAttempts' | 'sources' | 'attacks' | 'stressResults'
-  | 'specifications' | 'sessions' | 'researchSteps' | 'branches' | 'evidence' | 'graphEdges' | 'proofs';
+  | 'specifications' | 'sessions' | 'researchSteps' | 'branches' | 'evidence' | 'graphEdges' | 'proofs'
+  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks';
 
 export interface AgentEvent {
   projectId: string;
@@ -469,10 +620,34 @@ export interface AgentEvent {
   activity?: Activity;
 }
 
-export type ToolName = 'run_python' | 'symbolic_simplify' | 'solve_equation' | 'differentiate' | 'integrate' | 'matrix_compute' | 'capability_check' | 'z3_check';
+export type ToolName = 'run_python' | 'symbolic_simplify' | 'solve_equation' | 'differentiate' | 'integrate' | 'matrix_compute' | 'capability_check' | 'z3_check' | 'lean_check';
+
+export type ToolErrorType = 'NONE' | 'TOOL_ERROR' | 'PROGRAM_ERROR' | 'VALIDATION_ERROR' | 'TIMEOUT'
+  | 'OUTPUT_LIMIT' | 'UNAVAILABLE' | 'PROTOCOL_ERROR' | 'UNSOUND_PROOF';
+
+export type VerificationToolStatus = 'SUCCESS' | 'SAT' | 'UNSAT' | 'UNKNOWN' | 'BOUNDED_CHECK'
+  | 'FORMALLY_VERIFIED' | 'REJECTED_UNSOUND' | 'TOOL_FAILURE' | 'PROGRAM_FAILURE';
 
 export interface ToolInvocation { projectId: string; name: ToolName; purpose: string; input: Record<string, unknown>; }
-export interface ToolResult { ok: boolean; output: string; error?: string; durationMs: number; environment?: string; }
+export interface ToolResult {
+  ok: boolean;
+  success: boolean;
+  output: string;
+  stdout: string;
+  stderr: string;
+  error?: string;
+  errorType: ToolErrorType;
+  exitCode: number | null;
+  workerExitCode?: number | null;
+  durationMs: number;
+  timeout: boolean;
+  environment?: string;
+  verificationStatus?: VerificationToolStatus;
+  verificationLevel?: MathematicalVerificationLevel;
+  reasonUnknown?: string;
+  artifactLocation?: string;
+  auditLogPath?: string;
+}
 
 export interface DesktopApi {
   projects: {
@@ -494,7 +669,21 @@ export interface DesktopApi {
     onEvent(callback: (event: AgentEvent) => void): () => void;
   };
   tools: { run(invocation: ToolInvocation): Promise<ToolResult> };
-  documents: { import(projectId: string): Promise<ProjectSnapshot | null> };
+  documents: {
+    import(projectId: string): Promise<ProjectSnapshot | null>;
+    importPaths(projectId: string, paths: string[]): Promise<ProjectSnapshot>;
+    importDropped(projectId: string, files: File[]): Promise<ProjectSnapshot>;
+    search(projectId: string, query: string, limit?: number): Promise<DocumentSearchResult[]>;
+  };
+  chat: {
+    send(input: ChatSendInput): Promise<ConversationMessage>;
+    stop(projectId: string): Promise<void>;
+    regenerate(projectId: string, messageId: string): Promise<ConversationMessage>;
+    onEvent(callback: (event: ChatEvent) => void): () => void;
+  };
+  literature: {
+    search(projectId: string, query: string): Promise<LiteratureSearchResult>;
+  };
   reports: {
     export(projectId: string, format: 'markdown' | 'latex'): Promise<string | null>;
     exportEvidence(projectId: string): Promise<string | null>;
@@ -510,6 +699,7 @@ export interface DesktopApi {
     system: {
       appVersion(): Promise<string>;
       openPath(path: string): Promise<string>;
+      openExternal(url: string): Promise<void>;
       runtimeDiagnostics(): Promise<RuntimeDiagnostics>;
     };
 }

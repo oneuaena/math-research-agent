@@ -6,9 +6,14 @@ import { SettingsModal } from './components/SettingsModal';
 import { useAppStore } from './store';
 
 export function App() {
-  const { snapshot, loading, error, clearError, loadProjects, handleAgentEvent, theme } = useAppStore();
+  const { snapshot, loading, error, clearError, loadProjects, handleAgentEvent, handleChatEvent, theme } = useAppStore();
   const [settings, setSettings] = useState(false);
-  useEffect(() => { void loadProjects(); const unsubscribe = window.research.agent.onEvent(handleAgentEvent); return unsubscribe; }, [loadProjects, handleAgentEvent]);
+  useEffect(() => {
+    void loadProjects();
+    const unsubscribeAgent = window.research.agent.onEvent(handleAgentEvent);
+    const unsubscribeChat = window.research.chat.onEvent(handleChatEvent);
+    return () => { unsubscribeAgent(); unsubscribeChat(); };
+  }, [loadProjects, handleAgentEvent, handleChatEvent]);
   useEffect(() => { document.documentElement.dataset.theme = theme; }, [theme]);
   return <>
     {loading && !snapshot ? <div className="app-loading"><span className="brand-mark">∴</span></div> : snapshot ? <ProjectShell openSettings={() => setSettings(true)} /> : <Dashboard openSettings={() => setSettings(true)} />}
