@@ -19,6 +19,7 @@ playwright-report/
 !.env.example
 credentials/
 credential*
+!electron/credentials.ts
 *safeStorage*
 *safe-storage*
 
