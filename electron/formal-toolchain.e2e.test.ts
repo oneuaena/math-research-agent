@@ -8,6 +8,7 @@ import { ResearchDatabase } from './database';
 import type { ModelProvider, ProviderRoleRequest, StageResult } from './provider';
 import { ResearchOrchestrator } from './research-orchestrator';
 import { ToolRunner } from './tool-runner';
+import { resolveLeanRuntime } from './tools/lean-adapter';
 
 vi.mock('electron', () => ({
   app: {
@@ -25,7 +26,9 @@ const emptyAction = (stage: AgentStage): RoleAction => ({
   failures: [], tokenUsage: { input: 0, output: 0, total: 0 },
 });
 
-describe('Agent formal verification toolchain', () => {
+const realFormalToolchain = resolveLeanRuntime('').available ? describe : describe.skip;
+
+realFormalToolchain('Agent formal verification toolchain', () => {
   it('executes Python, Z3, and Lean and promotes only the faithfully mapped kernel proof', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mra-formal-e2e-'));
     const db = new ResearchDatabase(join(directory, 'research.sqlite3'));
