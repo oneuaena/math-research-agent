@@ -12,11 +12,14 @@ This is an independent open-source project. References to OpenAI-compatible APIs
 
 Windows 10/11 x64 users:
 
-1. Open the [Gitee Releases page](https://gitee.com/lu-chuanyou/math-research-agent/releases).
-2. Download `Math-Research-Agent-Setup-1.1.0.exe`.
-3. Run the installer and open Math Research Agent.
-4. Open **Settings**, enter your own model Provider, Base URL, model, and API key.
-5. Run **Runtime Diagnostics**, then start a research project.
+**[Download Math Research Agent 1.1.0 for Windows x64 (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.1.0/Math-Research-Agent-Setup-1.1.0.exe)**
+
+SHA-256: `7C8479FC7886EC1959FF75320AB647EE60FD332FD39243F0669A28FC7CFC3E05`
+
+1. Click the direct download link above.
+2. Run the installer and open Math Research Agent.
+3. Open **Settings**, enter your own model Provider, Base URL, model, and API key.
+4. Run **Runtime Diagnostics**, then start a research project.
 
 The installer includes Python 3.12, SymPy, NumPy, SciPy, and Z3. Ordinary users do **not** need Node.js, Python, `npm install`, `pip install`, PATH changes, or administrator access for the default per-user installation.
 
@@ -100,7 +103,7 @@ The packaged application is currently developed and verified for **64-bit Window
 ## Developer quick start
 
 ```powershell
-git clone https://gitee.com/lu-chuanyou/math-research-agent.git
+git clone https://github.com/oneuaena/math-research-agent.git
 cd math-research-agent
 npm install
 python -m pip install -r python\requirements.txt

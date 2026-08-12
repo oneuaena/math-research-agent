@@ -7,7 +7,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://gitee.com/lu-chuanyou/math-research-agent.git"
+    "url": "https://github.com/oneuaena/math-research-agent.git"
   },
   "main": "dist-electron/electron/main.js",
   "scripts": {

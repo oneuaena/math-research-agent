@@ -46,5 +46,5 @@ All notable project changes are documented here. The format follows Keep a Chang
 
 - Renderer context isolation, sandboxing, disabled Node integration, denied popups, narrow IPC, encrypted provider credentials, bounded tool execution, and credential-redacted provider logs.
 
-[1.0.0]: https://gitee.com/lu-chuanyou/math-research-agent/releases/tag/v1.0.0
-[1.1.0]: https://gitee.com/lu-chuanyou/math-research-agent/releases/tag/v1.1.0
+[1.0.0]: https://github.com/oneuaena/math-research-agent/releases/tag/v1.0.0
+[1.1.0]: https://github.com/oneuaena/math-research-agent/releases/tag/v1.1.0

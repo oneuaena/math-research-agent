@@ -12,11 +12,14 @@ Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组�
 
 Windows 10/11 x64 普通用户：
 
-1. 打开 [Gitee Releases 页面](https://gitee.com/lu-chuanyou/math-research-agent/releases)。
-2. 下载 `Math-Research-Agent-Setup-1.1.0.exe`。
-3. 双击安装并打开 Math Research Agent。
-4. 打开“设置”，填写你自己的模型 Provider、Base URL、模型和 API Key。
-5. 运行“运行环境检查”，然后开始研究项目。
+**[直接下载 Math Research Agent 1.1.0 Windows x64 安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.1.0/Math-Research-Agent-Setup-1.1.0.exe)**
+
+SHA-256：`7C8479FC7886EC1959FF75320AB647EE60FD332FD39243F0669A28FC7CFC3E05`
+
+1. 点击上面的直接下载链接。
+2. 双击安装并打开 Math Research Agent。
+3. 打开“设置”，填写你自己的模型 Provider、Base URL、模型和 API Key。
+4. 运行“运行环境检查”，然后开始研究项目。
 
 安装包已经内置 Python 3.12、SymPy、NumPy、SciPy 和 Z3。普通用户**不需要**安装 Node.js/Python，不需要执行 `npm install`、`pip install`，不需要修改 PATH；默认按当前用户安装，也不需要管理员权限。
 
@@ -100,7 +103,7 @@ Electron 主进程
 ## 开发者快速开始
 
 ```powershell
-git clone https://gitee.com/lu-chuanyou/math-research-agent.git
+git clone https://github.com/oneuaena/math-research-agent.git
 cd math-research-agent
 npm install
 python -m pip install -r python\requirements.txt
