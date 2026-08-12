@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as delay } from 'node:timers/promises';
 import { app, net } from 'electron';
 import {
-  formalizationSchema, roleActionSchema, type FormalizationPayload, type NativeToolExecution, type RoleAction,
+  formalizationSchema, normalizeRoleActionPayload, roleActionSchema, type FormalizationPayload, type NativeToolExecution, type RoleAction,
 } from '../src/shared/research';
 import {
   ProviderProtocolError, runProviderToolLoop, type ProviderConversationMessage, type ProviderToolCall,
@@ -368,16 +368,16 @@ export class ResponsesProvider implements ModelProvider {
       : '';
     const prompt = `Act as the ${request.role} during stage ${request.stage}. Return exactly one JSON object matching this shape and field types:\n${JSON.stringify(roleActionContract)}\nArray item contracts (instructions only; do not copy placeholder values): ${JSON.stringify(roleActionItemContract)}\nUse [] when a collection has no relevant item. nextStage must be an uppercase research stage.${toolInstruction}${sourceInstruction} Never label model output as verified; citations may only use supplied source chunks; model proof steps are uncertain until independently checked. Context:\n${JSON.stringify(context)}`;
     const response = await this.requestJsonWithMeta(prompt, signal, hasNativeTools ? request.snapshot.project.id : undefined);
-    let parsed = roleActionSchema.safeParse(response.value);
+    let valueToRepair = normalizeRoleActionPayload(response.value);
+    let parsed = roleActionSchema.safeParse(valueToRepair);
     let nativeToolExecutions = response.nativeToolExecutions;
     let tokenUsage = response.tokenUsage;
-    let valueToRepair = response.value;
     for (let schemaRepairAttempt = 0; !parsed.success && schemaRepairAttempt < 2; schemaRepairAttempt += 1) {
       const issues = parsed.error.issues.slice(0, 30).map((issue) => `${issue.path.join('.') || 'root'}: ${issue.message}`);
-      const repairPrompt = `Repair the JSON below to match the exact contract. Return JSON only. All title, summary, and rationaleSummary strings must be non-empty. Do not add mathematical claims; preserve the supplied meaning, use [] for absent collections, and use only the enum values shown in the item contracts.\nContract: ${JSON.stringify(roleActionContract)}\nArray item contracts: ${JSON.stringify(roleActionItemContract)}\nValidation issues: ${JSON.stringify(issues)}\nOriginal JSON: ${JSON.stringify(response.value)}\nMost recent repair: ${JSON.stringify(valueToRepair)}`;
+      const repairPrompt = `Repair the JSON below to match the exact contract. Return JSON only. All title, summary, and rationaleSummary strings must be non-empty. Do not add mathematical claims; preserve the supplied meaning, use [] for absent collections, and use only the enum values shown in the item contracts.\nContract: ${JSON.stringify(roleActionContract)}\nArray item contracts: ${JSON.stringify(roleActionItemContract)}\nValidation issues: ${JSON.stringify(issues)}\nJSON to repair: ${JSON.stringify(valueToRepair)}`;
       const repaired = await this.requestJsonWithMeta(repairPrompt, signal, undefined, true);
-      parsed = roleActionSchema.safeParse(repaired.value);
-      valueToRepair = repaired.value;
+      valueToRepair = normalizeRoleActionPayload(repaired.value);
+      parsed = roleActionSchema.safeParse(valueToRepair);
       nativeToolExecutions = [...nativeToolExecutions, ...repaired.nativeToolExecutions];
       tokenUsage = {
         input: tokenUsage.input + repaired.tokenUsage.input,
@@ -386,7 +386,7 @@ export class ResponsesProvider implements ModelProvider {
       };
     }
     if (!parsed.success) {
-      throw this.malformed('Research role response remained incompatible after one schema-repair attempt.', this.endpoint('/chat/completions'), 0, 200);
+      throw this.malformed('Research role response remained incompatible after bounded schema-repair attempts.', this.endpoint('/chat/completions'), 0, 200);
     }
     const action = parsed.data;
     return {

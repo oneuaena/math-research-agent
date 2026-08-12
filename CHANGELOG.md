@@ -2,6 +2,15 @@
 
 All notable project changes are documented here. The format follows Keep a Changelog principles and the project uses semantic versioning for public releases.
 
+## [1.1.1] - 2026-08-12
+
+### Fixed
+
+- Normalize safe OpenAI-compatible research-action aliases before strict schema validation, including `GAP` to `PROOF_GAP`.
+- Preserve provider-supplied structured failure details as bounded text instead of rejecting an otherwise valid action.
+- Accept the existing `capability_check` deferred tool in the research-action contract.
+- Make the bounded schema-repair diagnostic accurate and always repair the latest normalized payload.
+
 ## [1.1.0] - 2026-08-11
 
 ### Added
@@ -48,3 +57,4 @@ All notable project changes are documented here. The format follows Keep a Chang
 
 [1.0.0]: https://github.com/oneuaena/math-research-agent/releases/tag/v1.0.0
 [1.1.0]: https://github.com/oneuaena/math-research-agent/releases/tag/v1.1.0
+[1.1.1]: https://github.com/oneuaena/math-research-agent/releases/tag/v1.1.1
