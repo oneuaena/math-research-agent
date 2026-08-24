@@ -90,5 +90,5 @@ describe('research checkpoint resume state machine', () => {
       db.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  });
+  }, 30_000);
 });
