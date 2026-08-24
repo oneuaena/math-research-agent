@@ -26,15 +26,15 @@ describe('Lean source policy', () => {
 realLean('real Lean 4 kernel adapter', () => {
   it('accepts a valid theorem through Lake and the Lean kernel', async () => {
     const result = await runLeanVerification({ code: 'example (n : Nat) : n = n := by\n  rfl', artifactFile: join(temporary, 'valid.lean'), userDataPath: temporary, configuredPath: '', timeoutMs: 120_000 });
-    expect(result).toMatchObject({ ok: true, success: true, errorType: 'NONE', exitCode: 0, timeout: false, verificationStatus: 'FORMALLY_VERIFIED', verificationLevel: 'FORMALLY_VERIFIED' });
-  }, 130_000);
+    expect(result, result.error).toMatchObject({ ok: true, success: true, errorType: 'NONE', exitCode: 0, timeout: false, verificationStatus: 'FORMALLY_VERIFIED', verificationLevel: 'FORMALLY_VERIFIED' });
+  }, 650_000);
 
   it('returns a real compiler error for an invalid theorem', async () => {
     const result = await runLeanVerification({ code: 'example : False := by\n  trivial', artifactFile: join(temporary, 'invalid.lean'), userDataPath: temporary, configuredPath: '', timeoutMs: 120_000 });
     expect(result.ok).toBe(false);
-    expect(result.errorType).toBe('PROGRAM_ERROR');
+    expect(result.errorType, result.error).toBe('PROGRAM_ERROR');
     expect(`${result.stdout}\n${result.stderr}`).toMatch(/type mismatch|unsolved goals|application type mismatch|False/i);
-  }, 130_000);
+  }, 650_000);
 
   it('rejects sorry before invoking the kernel', async () => {
     const result = await runLeanVerification({ code: 'example : True := by\n  sorry', artifactFile: join(temporary, 'sorry.lean'), userDataPath: temporary, configuredPath: '', timeoutMs: 120_000 });

@@ -16,7 +16,7 @@
     "electron:build": "tsc -p electron/tsconfig.json",
     "typecheck": "tsc --noEmit && tsc -p electron/tsconfig.json --noEmit",
     "test": "vitest run",
-    "test:formal-tools": "vitest run electron/tools/process-runner.test.ts electron/tools/lean-adapter.test.ts electron/tools/verification-audit.test.ts electron/formal-toolchain.e2e.test.ts",
+    "test:formal-tools": "vitest run --maxWorkers=1 electron/tools/process-runner.test.ts electron/tools/lean-adapter.test.ts electron/tools/verification-audit.test.ts electron/formal-toolchain.e2e.test.ts",
     "pretest:e2e": "npm run build",
     "test:e2e": "playwright test",
     "test:packaged": "node scripts/packaged-smoke.mjs",

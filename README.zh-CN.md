@@ -12,13 +12,13 @@ Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组�
 
 ### Windows 10/11 x64
 
-- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-Setup-1.2.0.exe)** — SHA-256 `A69068335CA208319DB5DE2618E9AF5BF1FD9E5F1BC4D6CD641242BDC142FEA1`
-- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-Windows-Software.zip)** — SHA-256 `0D4AC83913E7AB9711D808229C00B4B8E1D831FCF7D355E8DC6E12CE64FA9FD7`
+- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-Setup-1.2.0.exe)** — SHA-256 `4712516FF2FD330BFDA815E6E575CFCD41EE309059B11832236EF98E2362D74B`
+- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-Windows-Software.zip)** — SHA-256 `D59C198D980BF0ECC20A51A078CF6D151EEBD436A6171B2EC2039ED85744F5FF`
 
 ### macOS 13 或更高版本
 
-- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-arm64.zip)** — SHA-256 `F702F43B3F9C8944A4B77B03E73EF4F9EDB4E51D32581DB6CCADF87271302341`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-x64.zip)** — SHA-256 `F8CDEA34AD4DAA0E542380FF3729B183AC158F27AB714918ADB143452ECB7F51`
+- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-arm64.zip)** — SHA-256 `E47B4939843B2F8297A70804D903536E5B731AAB96A356AAE71E7BE406640EC4`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-x64.zip)** — SHA-256 `97EA797D41E47750938D5FEF87D58B15BE8FF131F26F70870BFF553C50AE4BE1`
 
 Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应用拖入“应用程序”目录再打开。启动后进入“设置”，填写自己的 Provider、Base URL、模型和 API Key，并运行“运行环境检查”。
 

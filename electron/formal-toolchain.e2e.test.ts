@@ -93,5 +93,5 @@ realFormalToolchain('Agent formal verification toolchain', () => {
       db.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 180_000);
+  }, 650_000);
 });

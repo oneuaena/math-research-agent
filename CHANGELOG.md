@@ -16,6 +16,7 @@ All notable project changes are documented here. The format follows Keep a Chang
 - Resume now advances from the recorded next stage instead of replaying a completed checkpoint stage.
 - macOS packages now contain architecture-specific `app.asar` archives and the correct Darwin Canvas native module instead of the Windows native module.
 - Provider research-role responses are normalized before strict schema validation while preserving bounded diagnostics.
+- Fresh Mathlib initialization is serialized within the application, and formal CI allows the pinned cache download to finish instead of racing after a short test timeout.
 
 ### Security
 

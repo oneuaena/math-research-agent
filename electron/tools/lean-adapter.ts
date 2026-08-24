@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { delimiter, dirname, extname, join, relative } from 'node:path';
+import { delimiter, dirname, extname, join, relative, resolve } from 'node:path';
 import type { ToolResult } from '../../src/shared/types';
 import { runBoundedProcess } from './process-runner';
 
@@ -71,8 +71,11 @@ export function unsoundLeanConstructs(code: string): string[] {
 
 const LEAN_TOOLCHAIN = 'leanprover/lean4:v4.32.0';
 const MATHLIB_REVISION = 'v4.32.0';
+const mathlibPreparations = new Map<string, Promise<string | null>>();
 
 function formalWorkspace(userDataPath: string): string {
+  const configured = process.env.MRA_FORMAL_WORKSPACE?.trim();
+  if (configured) return resolve(configured);
   // Mathlib's source and cache are several GB. Keep them off C: on the
   // configured Windows machine, while preserving a safe local fallback.
   if (process.platform === 'win32' && existsSync('D:\\')) return 'D:\\Math Research Agent\\formal-workspace';
@@ -113,7 +116,7 @@ function writeFileIfChanged(path: string, content: string): void {
  * not derived from submitted Lean source: `lake update` is only ever allowed
  * to read this fixed Lake configuration.
  */
-async function prepareMathlibProject(project: string, executable: string, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
+async function prepareMathlibProjectOnce(project: string, executable: string, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
   mkdirSync(project, { recursive: true });
   writeFileIfChanged(join(project, 'lean-toolchain'), `${LEAN_TOOLCHAIN}\n`);
   writeFileIfChanged(join(project, 'lakefile.toml'), [
@@ -145,6 +148,19 @@ async function prepareMathlibProject(project: string, executable: string, timeou
   if (cache.timedOut) return 'Mathlib cache setup timed out.';
   if (cache.spawnError || cache.exitCode !== 0) return `Mathlib cache setup failed: ${[cache.spawnError, cache.stderr, cache.stdout].filter(Boolean).join('\n').slice(0, 4_000)}`;
   return existsSync(mathlibOlean) ? null : 'Mathlib setup completed without usable compiled Mathlib artifacts.';
+}
+
+async function prepareMathlibProject(project: string, executable: string, timeoutMs: number, signal?: AbortSignal): Promise<string | null> {
+  const key = resolve(project);
+  const active = mathlibPreparations.get(key);
+  if (active) return active;
+  const preparation = prepareMathlibProjectOnce(key, executable, timeoutMs, signal);
+  mathlibPreparations.set(key, preparation);
+  try {
+    return await preparation;
+  } finally {
+    if (mathlibPreparations.get(key) === preparation) mathlibPreparations.delete(key);
+  }
 }
 
 /** Local-only declaration/source discovery. It never sends theorem text away. */
