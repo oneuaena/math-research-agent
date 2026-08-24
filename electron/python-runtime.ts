@@ -14,12 +14,13 @@ export function resolvePythonRuntime(input: {
   platform?: NodeJS.Platform;
 }): PythonRuntimeResolution {
   if (input.packaged) {
-    const executableName = (input.platform ?? process.platform) === 'win32' ? 'python.exe' : 'python';
+    const platform = input.platform ?? process.platform;
+    const executableParts = platform === 'win32' ? ['python.exe'] : platform === 'darwin' ? ['bin', 'python3.12'] : ['bin', 'python3'];
     return {
       source: 'bundled',
-      executable: join(input.resourcesPath, 'runtime', 'python', executableName),
+      executable: join(input.resourcesPath, 'runtime', 'python', ...executableParts),
       argsPrefix: [],
-      displayPath: `resources/runtime/python/${executableName}`,
+      displayPath: `resources/runtime/python/${executableParts.join('/')}`,
     };
   }
   const configured = input.configuredPath.trim() || 'python';

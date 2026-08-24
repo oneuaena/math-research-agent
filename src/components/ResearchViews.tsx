@@ -9,14 +9,14 @@ const sessionZh: Record<string, string> = { RUNNING: '运行中', PAUSED: '已�
 const roleZh: Record<string, string> = { 'research-planner': '研究规划', explorer: '探索', 'experimental-mathematician': '数学实验', 'lemma-generator': '引理生成', 'proof-builder': '证明构建', skeptic: '证明批判', 'independent-verifier': '独立验证', 'research-synthesizer': '研究综合' };
 
 export function ResearchConsole() {
-  const { snapshot, language } = useAppStore();
+  const { snapshot, researchJob, language } = useAppStore();
   if (!snapshot) return null;
   const zh = language === 'zh';
   const session = snapshot.sessions.at(-1);
   const spec = snapshot.specifications.at(-1);
   const recent = snapshot.researchSteps.slice(-18).reverse();
   return <div className="research-console">
-    <header className="view-toolbar"><div><h1>{text(zh, '研究会话', 'Research session')}</h1><span>{session ? `${zh ? sessionZh[session.status] ?? session.status : session.status} · ${zh ? stageZh[session.currentStage] ?? session.currentStage : session.currentStage}` : text(zh, '尚未运行', 'Not started')}</span></div></header>
+    <header className="view-toolbar"><div><h1>{text(zh, '研究会话', 'Research session')}</h1><span>{session ? `${zh ? sessionZh[session.status] ?? session.status : session.status} · ${zh ? stageZh[session.currentStage] ?? session.currentStage : session.currentStage}${researchJob ? ` · ${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : ''}` : researchJob ? `${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : text(zh, '尚未运行', 'Not started')}</span></div></header>
     <div className="research-body">
       <section className="research-metrics">
         <Metric icon={Clock3} label={text(zh, '行动', 'Actions')} value={String(session?.actionCount ?? 0)} />
@@ -25,6 +25,7 @@ export function ResearchConsole() {
         <Metric icon={Network} label={text(zh, '检查点', 'Checkpoints')} value={String(session?.checkpointCount ?? 0)} />
       </section>
       {session?.pauseReason && <div className="research-notice"><CircleDot size={14} /><span>{session.pauseReason}</span></div>}
+      {researchJob?.lastError && <div className="research-notice"><AlertTriangle size={14} /><span>{researchJob.lastError}{researchJob.nextRunAt ? ` · ${text(zh, '下次重试', 'Retry')} ${new Date(researchJob.nextRunAt).toLocaleString()}` : ''}</span></div>}
       <section className="research-panel">
         <div className="research-panel-title"><div><Binary size={15} /><strong>{text(zh, '数学规格', 'Mathematical specification')}</strong></div><span>{spec ? (zh ? { 'machine-executable': '机器可执行', symbolic: '符号规格', 'natural-language': '自然语言规格' }[specificationLevel(spec)] : specificationLevel(spec)) : '—'}</span></div>
         {!spec ? <p className="muted">{text(zh, '运行后生成结构化规格。', 'Run to create a structured specification.')}</p> : <div className="spec-grid">

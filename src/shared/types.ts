@@ -193,6 +193,7 @@ export interface ResearchSession {
   status: 'RUNNING' | 'PAUSED' | 'COMPLETE' | 'FAILED';
   currentStage: AgentStage;
   nextStage: AgentStage;
+  checkpointReturnStage?: AgentStage | null;
   iteration: number;
   actionCount: number;
   checkpointCount: number;
@@ -207,6 +208,26 @@ export interface ResearchSession {
   totalTokenUsage: number;
   totalElapsedMs: number;
   conclusion: 'candidate-proof' | 'partial-result' | 'counterexample' | 'inconclusive' | null;
+}
+
+export type ResearchJobStatus = 'QUEUED' | 'RUNNING' | 'RETRY_WAIT' | 'PAUSED' | 'COMPLETED' | 'FAILED' | 'CANCELLED';
+export type ResearchJobDesiredState = 'RUNNING' | 'PAUSED' | 'CANCELLED';
+
+export interface ResearchJob {
+  id: string;
+  projectId: string;
+  status: ResearchJobStatus;
+  desiredState: ResearchJobDesiredState;
+  resumeRequested: boolean;
+  attemptCount: number;
+  maxAttempts: number;
+  createdAt: string;
+  updatedAt: string;
+  startedAt: string | null;
+  heartbeatAt: string | null;
+  nextRunAt: string | null;
+  completedAt: string | null;
+  lastError: string;
 }
 
 export interface ProofStep {
@@ -300,6 +321,12 @@ export interface Experiment {
   method?: string;
   searchSpace?: string;
   environment?: string;
+  stdout?: string;
+  stderr?: string;
+  exitCode?: number | null;
+  workerExitCode?: number | null;
+  artifactLocation?: string;
+  auditLogPath?: string;
   verificationStatus?: VerificationStatus;
   rerunOf?: string | null;
   createdAt: string;
@@ -584,6 +611,8 @@ export interface ProviderSettings {
   maxToolSeconds: number;
   providerTimeoutSeconds: number;
   maxResearchMinutes: number;
+  maxAutonomousHours: number;
+  maxTotalTokens: number;
   checkpointEvery: number;
   maxBranches: number;
   literatureSearchMode: 'auto' | 'manual' | 'off';
@@ -620,7 +649,8 @@ export interface AgentEvent {
   activity?: Activity;
 }
 
-export type ToolName = 'run_python' | 'symbolic_simplify' | 'solve_equation' | 'differentiate' | 'integrate' | 'matrix_compute' | 'capability_check' | 'z3_check' | 'lean_check';
+export type ToolName = 'run_python' | 'symbolic_simplify' | 'solve_equation' | 'differentiate' | 'integrate' | 'matrix_compute' | 'capability_check' | 'z3_check' | 'lean_check'
+  | 'mathlib_search' | 'workspace_write' | 'workspace_read' | 'download_file' | 'run_command';
 
 export type ToolErrorType = 'NONE' | 'TOOL_ERROR' | 'PROGRAM_ERROR' | 'VALIDATION_ERROR' | 'TIMEOUT'
   | 'OUTPUT_LIMIT' | 'UNAVAILABLE' | 'PROTOCOL_ERROR' | 'UNSOUND_PROOF';
@@ -662,10 +692,11 @@ export interface DesktopApi {
     remove(collection: CollectionName, id: string, projectId: string): Promise<ProjectSnapshot>;
   };
   agent: {
-    start(projectId: string): Promise<void>;
-    resume(projectId: string): Promise<void>;
-    pause(projectId: string): Promise<void>;
-    stop(projectId: string): Promise<void>;
+    start(projectId: string): Promise<ResearchJob>;
+    resume(projectId: string): Promise<ResearchJob>;
+    pause(projectId: string): Promise<ResearchJob | null>;
+    stop(projectId: string): Promise<ResearchJob | null>;
+    jobs(projectId?: string): Promise<ResearchJob[]>;
     onEvent(callback: (event: AgentEvent) => void): () => void;
   };
   tools: { run(invocation: ToolInvocation): Promise<ToolResult> };

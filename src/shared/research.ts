@@ -34,7 +34,7 @@ const proofStepProposalSchema = z.object({
 });
 
 export const nativeToolExecutionSchema = z.object({
-  name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check']),
+  name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check', 'mathlib_search', 'workspace_write', 'workspace_read', 'download_file', 'run_command']),
   purpose: z.string().min(1).max(500),
   input: z.record(z.string(), z.unknown()),
   ok: z.boolean(),
@@ -79,7 +79,7 @@ export const roleActionSchema = z.object({
     comment: z.string().max(4000),
   })).max(50).default([]),
   toolCalls: z.array(z.object({
-    name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check']),
+    name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check', 'mathlib_search', 'workspace_write', 'workspace_read', 'download_file', 'run_command']),
     purpose: z.string().min(1).max(500), input: z.record(z.string(), z.unknown()),
   })).max(8).default([]),
   nativeToolExecutions: z.array(nativeToolExecutionSchema).max(12).optional(),

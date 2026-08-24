@@ -4,26 +4,27 @@
 
 **A reproducible, auditable autonomous research workspace for experimental mathematics and conjecture exploration.**
 
-Math Research Agent is a local-first Electron desktop application for organizing model-assisted mathematical exploration. It combines a persistent research tree, structured experiments, proof attempts, skeptical review, evidence labels, budgets, and checkpoint/resume execution in one Windows workspace.
+Math Research Agent is a local-first Electron desktop application for organizing model-assisted mathematical exploration. It combines a persistent research tree, structured experiments, proof attempts, skeptical review, evidence labels, budgets, and checkpoint/resume execution in one desktop workspace.
 
 This is an independent open-source project. References to OpenAI-compatible APIs, DeepSeek, OpenAI, Anthropic, Microsoft, Lean, SageMath, or universities describe interoperability only and do not imply affiliation or endorsement.
 
 ## Download
 
-Windows 10/11 x64 users:
+### Windows 10/11 x64
 
-**[Download Math Research Agent 1.1.0 for Windows x64 (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.1.0/Math-Research-Agent-Setup-1.1.0.exe)**
+- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-Setup-1.2.0.exe)** — SHA-256 `A69068335CA208319DB5DE2618E9AF5BF1FD9E5F1BC4D6CD641242BDC142FEA1`
+- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-Windows-Software.zip)** — SHA-256 `0D4AC83913E7AB9711D808229C00B4B8E1D831FCF7D355E8DC6E12CE64FA9FD7`
 
-SHA-256: `7C8479FC7886EC1959FF75320AB647EE60FD332FD39243F0669A28FC7CFC3E05`
+### macOS 13 or newer
 
-1. Click the direct download link above.
-2. Run the installer and open Math Research Agent.
-3. Open **Settings**, enter your own model Provider, Base URL, model, and API key.
-4. Run **Runtime Diagnostics**, then start a research project.
+- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-arm64.zip)** — SHA-256 `F702F43B3F9C8944A4B77B03E73EF4F9EDB4E51D32581DB6CCADF87271302341`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-x64.zip)** — SHA-256 `F8CDEA34AD4DAA0E542380FF3729B183AC158F27AB714918ADB143452ECB7F51`
+
+On Windows, run the installer or extract the portable ZIP. On macOS, extract the ZIP, drag the app into **Applications**, then open it. After launch, open **Settings**, enter your own provider details, and run **Runtime Diagnostics**.
 
 The installer includes Python 3.12, SymPy, NumPy, SciPy, and Z3. Ordinary users do **not** need Node.js, Python, `npm install`, `pip install`, PATH changes, or administrator access for the default per-user installation.
 
-Windows SmartScreen may show **Unknown publisher** because this independent open-source release does not have a commercial code-signing certificate. Verify the published SHA-256 and download only from the project release page; do not disable Windows security globally.
+Windows SmartScreen may show **Unknown publisher** because this independent open-source release does not have a commercial code-signing certificate. macOS packages are also unsigned and unnotarized; first launch may require Control-clicking the app and choosing **Open**. Verify the published SHA-256 and do not disable operating-system security globally.
 
 ## Overview
 
@@ -87,9 +88,9 @@ Electron main process
 
 The renderer runs with context isolation, no Node integration, Electron sandboxing, denied popup windows, and a narrow preload bridge. Detailed module and trust-boundary notes are in [Architecture](docs/ARCHITECTURE.md).
 
-## Supported platform
+## Supported platforms
 
-The packaged application is currently developed and verified for **64-bit Windows 10 and Windows 11**. Other desktop platforms are not release-tested.
+The packaged application supports **64-bit Windows 10/11** and **macOS 13+** on Apple Silicon or Intel. Windows received dynamic packaged and installed-app tests. The macOS packages received archive, architecture, native-dependency, permission, symlink, and package-content validation on Windows, but were not launched on physical Macs for this release.
 
 ## Developer requirements
 
@@ -167,6 +168,12 @@ Prepare the pinned Windows runtime and create a self-contained x64 NSIS installe
 npm.cmd run dist
 ```
 
+On Windows, cross-assemble the two self-contained macOS ZIPs with:
+
+```powershell
+npm.cmd run dist:mac
+```
+
 `npm run dist` verifies and downloads the official CPython embeddable ZIP and fixed Windows wheels when they are not cached. The current installer is not configured with a public trusted-publisher code-signing certificate. Publish installers through release attachments, not the source branch. See [Release process](docs/RELEASE.md).
 
 ## Testing
@@ -187,6 +194,8 @@ After `npm.cmd run dist`, run the packaged smoke test with:
 ```powershell
 npm.cmd run test:packaged
 npm.cmd run test:packaged-runtime
+npm.cmd run test:packaged-autonomy
+node scripts/validate-macos-asars.mjs
 ```
 
 Provider E2E uses a local mock HTTP server. Tests against a real paid provider are intentionally excluded from public CI.
@@ -198,8 +207,8 @@ Provider E2E uses a local mock HTTP server. Tests against a real paid provider a
 - Imported documents use local text extraction and deterministic chunk retrieval, not OCR, embeddings, or a citation-grade semantic search engine.
 - The restricted Python worker is not an OS-level sandbox.
 - Provider compatibility varies, and model output can remain malformed or mathematically wrong after bounded recovery.
-- The Windows installer has no configured public code-signing identity.
-- Only Windows x64 is release-tested.
+- The Windows installer has no configured public code-signing identity; the macOS applications are not Developer-ID signed or notarized.
+- The macOS packages are statically and structurally validated, not dynamically tested on physical Apple Silicon and Intel Macs for this release.
 
 ## Research reproducibility
 

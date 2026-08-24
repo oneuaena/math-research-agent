@@ -51,6 +51,27 @@ describe('bounded Python worker transport', () => {
     expect(String(envelope?.stdout)).toHaveLength(250001);
   });
 
+  it('supports safe combinatorics and JSON checkpoint fallbacks without opening dunder access', async () => {
+    const { envelope } = await workerRequest('run_python', { code: [
+      'import itertools',
+      'import collections',
+      'import random',
+      'import pickle',
+      'import numpy as np',
+      'pairs = list(itertools.combinations([1, 2, 3, 4], 2))',
+      'counts = collections.Counter([1, 1, 2])',
+      'rng = random.Random(71)',
+      'checkpoint = pickle.loads(pickle.dumps({"pairs": len(pairs), "count": counts[1], "seed": rng.randrange(1000)}))',
+      "result = f'{checkpoint[\"pairs\"]}|{checkpoint[\"count\"]}|{np.__version__}'",
+    ].join('\n') });
+    expect(envelope).toMatchObject({ ok: true, output: expect.stringMatching(/^6\\|2\\|/), compatibility_fallbacks: expect.arrayContaining(['itertools=>safe standard-library facade', 'collections=>safe standard-library facade', 'random=>safe standard-library facade', 'pickle=>json-checkpoint facade']) });
+  });
+
+  it('continues to reject non-version dunder access', async () => {
+    const { envelope } = await workerRequest('run_python', { code: 'result = math.__dict__' });
+    expect(envelope).toMatchObject({ ok: false, error_type: 'VALIDATION_ERROR' });
+  });
+
   it('terminates an infinite program at the process timeout', async () => {
     const { execution, envelope } = await workerRequest('run_python', { code: 'while True:\n    pass' }, 150);
     expect(execution.timedOut).toBe(true);

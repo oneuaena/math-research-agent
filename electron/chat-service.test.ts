@@ -58,6 +58,24 @@ describe('persistent project chat', () => {
       database.close();
     }
   });
+
+  it('passes the project identity into chat so provider-native tools can use the local executor', async () => {
+    const { database, projectId } = fixture();
+    let suppliedProjectId = '';
+    const provider = {
+      respondChat: async (_messages: Array<{ role: string; content: string }>, _signal: AbortSignal, nativeToolProjectId?: string) => {
+        suppliedProjectId = nativeToolProjectId ?? '';
+        return 'A tool-capable chat response.';
+      },
+    } as unknown as ModelProvider;
+    const service = new ChatService(database, {} as CredentialStore, fakeAgent(), fakeLiterature(), () => undefined, () => provider);
+    try {
+      await service.send({ projectId, content: 'Create and execute a project script.' });
+      expect(suppliedProjectId).toBe(projectId);
+    } finally {
+      database.close();
+    }
+  });
 });
 
 function fakeAgent(): AgentCoordinator {

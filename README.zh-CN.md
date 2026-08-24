@@ -4,26 +4,27 @@
 
 **一个面向实验数学与猜想探索、强调可复现和可审计的自主研究工作台。**
 
-Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组织模型辅助的数学探索。它把持久化研究树、结构化实验、证明尝试、怀疑性审查、证据等级、预算和 checkpoint/resume 放在同一个 Windows 工作空间中。
+Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组织模型辅助的数学探索。它把持久化研究树、结构化实验、证明尝试、怀疑性审查、证据等级、预算和 checkpoint/resume 放在同一个桌面工作空间中。
 
 本项目是独立开源项目。OpenAI-compatible API、DeepSeek、OpenAI、Anthropic、Microsoft、Lean、SageMath 或大学名称仅用于事实性的兼容说明，不代表隶属、授权或背书。
 
 ## 下载
 
-Windows 10/11 x64 普通用户：
+### Windows 10/11 x64
 
-**[直接下载 Math Research Agent 1.1.0 Windows x64 安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.1.0/Math-Research-Agent-Setup-1.1.0.exe)**
+- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-Setup-1.2.0.exe)** — SHA-256 `A69068335CA208319DB5DE2618E9AF5BF1FD9E5F1BC4D6CD641242BDC142FEA1`
+- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-Windows-Software.zip)** — SHA-256 `0D4AC83913E7AB9711D808229C00B4B8E1D831FCF7D355E8DC6E12CE64FA9FD7`
 
-SHA-256：`7C8479FC7886EC1959FF75320AB647EE60FD332FD39243F0669A28FC7CFC3E05`
+### macOS 13 或更高版本
 
-1. 点击上面的直接下载链接。
-2. 双击安装并打开 Math Research Agent。
-3. 打开“设置”，填写你自己的模型 Provider、Base URL、模型和 API Key。
-4. 运行“运行环境检查”，然后开始研究项目。
+- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-arm64.zip)** — SHA-256 `F702F43B3F9C8944A4B77B03E73EF4F9EDB4E51D32581DB6CCADF87271302341`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-x64.zip)** — SHA-256 `F8CDEA34AD4DAA0E542380FF3729B183AC158F27AB714918ADB143452ECB7F51`
+
+Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应用拖入“应用程序”目录再打开。启动后进入“设置”，填写自己的 Provider、Base URL、模型和 API Key，并运行“运行环境检查”。
 
 安装包已经内置 Python 3.12、SymPy、NumPy、SciPy 和 Z3。普通用户**不需要**安装 Node.js/Python，不需要执行 `npm install`、`pip install`，不需要修改 PATH；默认按当前用户安装，也不需要管理员权限。
 
-由于独立开源发行版没有商业代码签名证书，Windows SmartScreen 可能显示“Unknown publisher / 未知发布者”。请从项目 Release 页面下载并核对公开的 SHA-256；不要关闭整个 Windows 安全系统。
+由于独立开源发行版没有商业代码签名证书，Windows SmartScreen 可能显示“Unknown publisher / 未知发布者”。Mac 应用同样未签名、未公证，首次启动可能需要按住 Control 点击应用并选择“打开”。请核对公开的 SHA-256，不要全局关闭系统安全功能。
 
 ## 项目概览
 
@@ -89,7 +90,7 @@ Electron 主进程
 
 ## 支持平台
 
-当前打包应用面向并验证于 **64 位 Windows 10 和 Windows 11**。其他桌面平台尚未经过发布测试。
+当前打包应用支持 **64 位 Windows 10/11**，以及 Apple Silicon/Intel 上的 **macOS 13+**。Windows 版本完成了安装包和已安装应用的动态测试；Mac 包在 Windows 上完成了压缩包、架构、原生依赖、权限、符号链接和内容验证，但本次发行没有在实体 Mac 上启动测试。
 
 ## 开发环境要求
 
@@ -167,6 +168,12 @@ npm.cmd run build
 npm.cmd run dist
 ```
 
+在 Windows 上交叉组装两个自包含 Mac ZIP：
+
+```powershell
+npm.cmd run dist:mac
+```
+
 `npm run dist` 会在缓存缺失时校验并下载官方 CPython embeddable ZIP 与固定版本的 Windows wheels。当前 installer 未配置公开可信发布者代码签名证书。安装包应作为 Release 附件发布，不应提交到源码分支。详见[发布流程](docs/RELEASE.md)。
 
 ## 测试
@@ -187,6 +194,8 @@ npm.cmd run test:e2e
 ```powershell
 npm.cmd run test:packaged
 npm.cmd run test:packaged-runtime
+npm.cmd run test:packaged-autonomy
+node scripts/validate-macos-asars.mjs
 ```
 
 Provider E2E 使用本地 mock HTTP server。真实付费 Provider 测试不会进入公开 CI。
@@ -198,8 +207,8 @@ Provider E2E 使用本地 mock HTTP server。真实付费 Provider 测试不会�
 - 导入文档采用本地文本提取和确定性分块检索，不含 OCR、向量嵌入，也不是引用审计级语义搜索系统。
 - 受限 Python worker 不是 OS 级沙箱。
 - Provider 能力不同；经过有限恢复后，模型输出仍可能格式错误或数学上错误。
-- Windows installer 尚未配置公开代码签名身份。
-- 仅 Windows x64 经过发布验证。
+- Windows installer 尚未配置公开代码签名身份；Mac 应用未使用 Developer ID 签名或 Apple 公证。
+- 本次 Mac 包完成了静态与结构验证，但没有在实体 Apple Silicon/Intel Mac 上做动态运行测试。
 
 ## 研究可复现性
 

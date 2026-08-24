@@ -3,7 +3,7 @@ import { STAGE_LABELS } from '../src/shared/agent';
 import { canDisplayVerifiedProof, chooseNextStage, STAGE_ROLE, type RoleAction } from '../src/shared/research';
 import type {
   Activity, AgentEvent, AgentStage, Experiment, GraphEdge, ProofDocument, ResearchBranch, ResearchEvidence,
-  ResearchNode, ResearchSession, ResearchStep, StructuredSpecification, ToolInvocation, ToolResult, VerificationStatus,
+  ResearchNode, ResearchSession, ResearchStep, StructuredSpecification, ToolInvocation, ToolName, ToolResult, VerificationStatus,
 } from '../src/shared/types';
 import type { ResearchDatabase } from './database';
 import type { ModelProvider } from './provider';
@@ -56,7 +56,8 @@ export class ResearchOrchestrator {
     this.writeState('loop_started', session, resumeRequested, true);
 
     try {
-      while (!signal.aborted && runActions < settings.maxIterations && performance.now() - runStarted < settings.maxResearchMinutes * 60_000) {
+      while (!signal.aborted && runActions < settings.maxIterations && performance.now() - runStarted < settings.maxResearchMinutes * 60_000
+        && session.totalElapsedMs < settings.maxAutonomousHours * 3_600_000 && session.totalTokenUsage < settings.maxTotalTokens) {
         snapshot = this.db.getProject(projectId, false);
         const stage = session.nextStage;
         if (stage === 'PAUSED' || stage === 'FAILED' || stage === 'COMPLETE') break;
@@ -86,7 +87,14 @@ export class ResearchOrchestrator {
           checkpointsInCycle: Math.max(0, session.checkpointCount - session.cycleCheckpointStart),
         });
         const checkpointDue = session.actionCount + 1 >= (session.checkpointCount + 1) * settings.checkpointEvery;
-        if (checkpointDue && ['EXPLORE', 'REFLECT', 'REPLAN', 'SYNTHESIZE'].includes(stage)) nextStage = 'CHECKPOINT';
+        let checkpointReturnStage = session.checkpointReturnStage ?? null;
+        if (stage === 'CHECKPOINT' && nextStage !== 'PAUSED' && checkpointReturnStage) {
+          nextStage = checkpointReturnStage;
+          checkpointReturnStage = null;
+        } else if (checkpointDue && nextStage !== 'CHECKPOINT' && ['EXPLORE', 'REFLECT', 'REPLAN', 'SYNTHESIZE'].includes(stage)) {
+          checkpointReturnStage = nextStage;
+          nextStage = 'CHECKPOINT';
+        }
         const elapsedMs = Math.round(performance.now() - started);
         const step: ResearchStep = {
           id: randomUUID(), projectId, sessionId: session.id, iteration: session.iteration + 1, stage,
@@ -106,7 +114,7 @@ export class ResearchOrchestrator {
         session = {
           ...session, currentStage: stage, nextStage, iteration: session.iteration + 1,
           actionCount: session.actionCount + 1, branchCursor: session.branchCursor + (branch ? 1 : 0),
-          activeBranchId: branch?.id ?? null, updatedAt: now(), totalTokenUsage: session.totalTokenUsage + action.tokenUsage.total,
+          activeBranchId: branch?.id ?? null, checkpointReturnStage, updatedAt: now(), totalTokenUsage: session.totalTokenUsage + action.tokenUsage.total,
           totalElapsedMs: session.totalElapsedMs + elapsedMs,
           lastCheckpointAt: stage === 'CHECKPOINT' ? now() : session.lastCheckpointAt,
         };
@@ -124,7 +132,10 @@ export class ResearchOrchestrator {
       } else if (session.nextStage === 'COMPLETE') {
         session = { ...session, status: 'COMPLETE', currentStage: 'COMPLETE', completedAt: now(), updatedAt: now() };
       } else {
-        const reason = session.nextStage === 'PAUSED' ? 'Checkpoint cycle completed. Resume to continue.' : 'Run budget reached. Resume to continue from this checkpoint.';
+        const safetyBudgetReached = session.totalElapsedMs >= settings.maxAutonomousHours * 3_600_000 || session.totalTokenUsage >= settings.maxTotalTokens;
+        const reason = safetyBudgetReached
+          ? 'AUTONOMY_BUDGET_REACHED: cumulative time or token safety budget was reached. Increase the configured budget and resume after review.'
+          : session.nextStage === 'PAUSED' ? 'Checkpoint cycle completed. Resume to continue.' : 'Per-run budget reached. The persistent job will continue from this checkpoint.';
         session = { ...session, status: 'PAUSED', currentStage: 'PAUSED', pauseReason: reason, updatedAt: now() };
       }
       this.db.saveRecord('sessions', session);
@@ -133,7 +144,15 @@ export class ResearchOrchestrator {
       this.db.addActivity(activity);
       this.publish({ projectId, running: false, stage: session.currentStage, activity });
     } catch (error) {
-      if (signal.aborted) return;
+      if (signal.aborted) {
+        session = { ...session, status: 'PAUSED', currentStage: 'PAUSED', pauseReason: 'Paused by user.', updatedAt: now() };
+        this.db.saveRecord('sessions', session);
+        this.writeState('loop_stopped', session, resumeRequested, false);
+        const activity = this.activity(projectId, 'PAUSED', 'Research paused', 'info', session.pauseReason);
+        this.db.addActivity(activity);
+        this.publish({ projectId, running: false, stage: 'PAUSED', activity });
+        return;
+      }
       const message = error instanceof Error ? error.message : 'Autonomous research failed.';
       session = { ...session, status: 'FAILED', currentStage: 'FAILED', failure: message, updatedAt: now() };
       this.db.saveRecord('sessions', session);
@@ -164,6 +183,13 @@ export class ResearchOrchestrator {
     }
     const sourceQuery = [currentSnapshot.project.question, currentSnapshot.project.goal, branch?.objective ?? '', stage].join('\n');
     const sourceContext = this.db.searchDocumentChunks(currentSnapshot.project.id, sourceQuery, 8);
+    if (stage === 'PROOF_CRITIQUE') {
+      const [skeptic, verifier] = await Promise.all([
+        this.provider.runRole({ stage, role: 'skeptic', snapshot: currentSnapshot, branch, sourceContext }, signal),
+        this.provider.runRole({ stage, role: 'independent-verifier', snapshot: currentSnapshot, branch, sourceContext }, signal),
+      ]);
+      return { action: mergeIndependentReviews(skeptic, verifier), specification: null };
+    }
     const action = await this.provider.runRole({ stage, role: STAGE_ROLE[stage] ?? 'research-synthesizer', snapshot: currentSnapshot, branch, sourceContext }, signal);
     return { action, specification: null };
   }
@@ -176,7 +202,7 @@ export class ResearchOrchestrator {
       const evidence: ResearchEvidence = { id: randomUUID(), projectId, sessionId: session.id, branchId: branch?.id ?? null, ...proposal, sourceIds: [], experimentIds: [], createdAt: now() };
       this.db.saveRecord('evidence', evidence); evidenceIds.push(evidence.id);
     }
-    if ((stage === 'PLAN' || stage === 'REPLAN') && action.branches.length) this.persistBranches(projectId, session, action);
+    if ((stage === 'PLAN' || stage === 'REPLAN') && action.branches.length) this.persistBranches(projectId, session, branch, action);
     this.persistNodes(projectId, branch, action, evidenceIds);
     this.persistProof(projectId, session, branch, action);
 
@@ -215,12 +241,84 @@ export class ResearchOrchestrator {
     for (const call of calls) {
       if (signal.aborted) break;
       const invocation: ToolInvocation = { projectId, name: call.name, purpose: call.purpose, input: call.input };
-      const result = await this.tools.run(invocation);
+      const result = await this.runTrackedTool(stage, invocation);
       const artifact = this.persistToolArtifact(projectId, session, branch, call, result);
       toolCallIds.push(artifact.callId);
       evidenceIds.push(artifact.evidenceId);
     }
+    if (stage === 'FORMAL_VERIFY') {
+      const reproduced = await this.reproduceDeterministicResults(projectId, session, branch, signal);
+      evidenceIds.push(...reproduced.evidenceIds);
+      toolCallIds.push(...reproduced.toolCallIds);
+    }
     return { evidenceIds, toolCallIds };
+  }
+
+  private async reproduceDeterministicResults(projectId: string, session: ResearchSession, branch: ResearchBranch | null, signal: AbortSignal): Promise<{ evidenceIds: string[]; toolCallIds: string[] }> {
+    const reproducibleTools = new Set<ToolName>(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'z3_check', 'lean_check']);
+    const snapshot = this.db.getProject(projectId, false);
+    const alreadyReproduced = new Set(snapshot.experiments.map((item) => item.rerunOf).filter((item): item is string => Boolean(item)));
+    const originals = snapshot.experiments.filter((item) => item.status === 'succeeded' && !item.rerunOf
+      && reproducibleTools.has(item.tool as ToolName) && !alreadyReproduced.has(item.id)).slice(-3);
+    const evidenceIds: string[] = [];
+    const toolCallIds: string[] = [];
+    for (const original of originals) {
+      if (signal.aborted) break;
+      let input: Record<string, unknown>;
+      try { input = JSON.parse(original.input) as Record<string, unknown>; }
+      catch { continue; }
+      const invocation: ToolInvocation = {
+        projectId, name: original.tool as ToolName,
+        purpose: `Independent reproduction of experiment ${original.id}: ${original.purpose}`,
+        input,
+      };
+      const result = await this.runTrackedTool('FORMAL_VERIFY', invocation);
+      const matches = result.ok && canonicalToolOutput(result.output) === canonicalToolOutput(original.output);
+      const createdAt = now();
+      const rerun: Experiment = {
+        id: randomUUID(), projectId, purpose: invocation.purpose, code: original.code, tool: original.tool,
+        input: original.input, output: result.ok ? result.output : result.error ?? '',
+        interpretation: matches
+          ? 'VERIFIED REPRODUCTION: the deterministic tool was rerun from the persisted input and returned the same normalized output.'
+          : 'FAILED REPRODUCTION: the rerun failed or differed from the persisted output; the original result must not be treated as independently reproduced.',
+        relatedNodeId: original.relatedNodeId, status: matches ? 'succeeded' : 'failed', durationMs: result.durationMs,
+        environment: result.environment, stdout: result.stdout, stderr: result.stderr, exitCode: result.exitCode,
+        workerExitCode: result.workerExitCode, artifactLocation: result.artifactLocation, auditLogPath: result.auditLogPath,
+        verificationStatus: matches ? original.verificationStatus : 'unverified', rerunOf: original.id,
+        createdAt, updatedAt: createdAt,
+      };
+      this.db.saveRecord('experiments', rerun);
+      const evidence: ResearchEvidence = {
+        id: randomUUID(), projectId, sessionId: session.id, branchId: branch?.id ?? null,
+        type: original.tool === 'lean_check' || original.tool === 'z3_check' ? 'formal-check' : 'exact-computation',
+        title: matches ? `Reproduced: ${original.purpose}` : `Reproduction mismatch: ${original.purpose}`,
+        content: rerun.interpretation, verificationStatus: matches ? (original.verificationStatus ?? 'computationally-verified') : 'unverified',
+        sourceIds: [], experimentIds: [original.id, rerun.id], reproducible: matches, createdAt,
+      };
+      this.db.saveRecord('evidence', evidence);
+      toolCallIds.push(rerun.id);
+      evidenceIds.push(evidence.id);
+    }
+    return { evidenceIds, toolCallIds };
+  }
+
+  private async runTrackedTool(stage: AgentStage, invocation: ToolInvocation): Promise<ToolResult> {
+    const started = performance.now();
+    const planned = this.activity(invocation.projectId, stage, `PLANNED: ${invocation.name}`, 'info', invocation.purpose);
+    planned.kind = 'tool';
+    this.db.addActivity(planned);
+    this.publish({ projectId: invocation.projectId, running: true, stage, activity: planned });
+    const running = { ...planned, id: randomUUID(), title: `RUNNING: ${invocation.name}`, status: 'running' as const, createdAt: now() };
+    this.db.addActivity(running);
+    this.publish({ projectId: invocation.projectId, running: true, stage, activity: running });
+    const result = await this.tools.run(invocation);
+    const detail = result.ok
+      ? `VERIFIED: exit ${result.exitCode ?? 0}; stdout ${(result.stdout ?? '').slice(0, 1_000) || '(empty)'}${result.stderr ? `; stderr ${result.stderr.slice(0, 1_000)}` : ''}`
+      : `FAILED: ${result.error ?? 'tool failure'}; exit ${result.exitCode ?? 'n/a'}; stderr ${(result.stderr ?? '').slice(0, 1_000) || '(empty)'}`;
+    const completed = { ...planned, id: randomUUID(), title: `${result.ok ? 'VERIFIED' : 'FAILED'}: ${invocation.name}`, detail, status: result.ok ? 'succeeded' as const : 'failed' as const, durationMs: Math.round(performance.now() - started), createdAt: now() };
+    this.db.addActivity(completed);
+    this.publish({ projectId: invocation.projectId, running: true, stage, activity: completed });
+    return result;
   }
 
   private persistToolArtifact(
@@ -246,11 +344,17 @@ export class ResearchOrchestrator {
       tool: call.name,
       input: JSON.stringify(call.input),
       output: result.ok ? result.output : result.error ?? '',
-      interpretation: result.ok ? 'Tool completed. Interpret only within the recorded search range and assumptions.' : 'Tool failed; no mathematical claim was promoted.',
+      interpretation: result.ok ? 'VERIFIED: a local tool returned the recorded exit code, stdout, stderr, and output. Interpret only within the recorded search range and assumptions.' : 'FAILED: the tool did not produce verified mathematical evidence; no mathematical claim was promoted.',
       relatedNodeId: branch?.rootNodeId ?? null,
       status: result.ok ? 'succeeded' : 'failed',
       durationMs: result.durationMs,
       environment: result.environment,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      exitCode: result.exitCode,
+      workerExitCode: result.workerExitCode,
+      artifactLocation: result.artifactLocation,
+      auditLogPath: result.auditLogPath,
       verificationStatus,
       rerunOf: null,
       createdAt,
@@ -298,15 +402,16 @@ export class ResearchOrchestrator {
     });
   }
 
-  private persistBranches(projectId: string, session: ResearchSession, action: RoleAction): void {
+  private persistBranches(projectId: string, session: ResearchSession, parentBranch: ResearchBranch | null, action: RoleAction): void {
     const snapshot = this.db.getProject(projectId, false);
     const root = snapshot.nodes.find((node) => node.parentId === null)!;
     const existingTitles = new Set(snapshot.branches.map((item) => item.title));
     for (const proposal of action.branches.filter((item) => !existingTitles.has(item.title)).slice(0, this.db.getSettings().maxBranches)) {
       const createdAt = now(); const nodeId = randomUUID();
-      this.db.saveRecord('nodes', { id: nodeId, projectId, parentId: root?.id ?? null, kind: 'SUBGOAL', title: proposal.title, content: proposal.objective, statement: proposal.objective, status: 'UNEXPLORED', dependencies: root ? [root.id] : [], sources: [], tools: [], summary: proposal.method, x: 350 + snapshot.branches.length * 40, y: 80 + snapshot.branches.length * 110, createdAt, updatedAt: createdAt } satisfies ResearchNode);
-      if (root) this.db.saveRecord('graphEdges', { id: randomUUID(), projectId, sourceId: nodeId, targetId: root.id, kind: 'SUPPORTS', label: 'research route', createdAt } satisfies GraphEdge);
-      this.db.saveRecord('branches', { id: randomUUID(), projectId, sessionId: session.id, title: proposal.title, objective: proposal.objective, method: proposal.method, status: 'queued', priority: proposal.priority, parentBranchId: null, rootNodeId: nodeId, lastStepId: null, findings: [], failures: [], createdAt, updatedAt: createdAt } satisfies ResearchBranch);
+      const parentNodeId = parentBranch?.rootNodeId ?? root?.id ?? null;
+      this.db.saveRecord('nodes', { id: nodeId, projectId, parentId: parentNodeId, kind: 'SUBGOAL', title: proposal.title, content: proposal.objective, statement: proposal.objective, status: 'UNEXPLORED', dependencies: parentNodeId ? [parentNodeId] : [], sources: [], tools: [], summary: proposal.method, x: 350 + snapshot.branches.length * 40, y: 80 + snapshot.branches.length * 110, createdAt, updatedAt: createdAt } satisfies ResearchNode);
+      if (parentNodeId) this.db.saveRecord('graphEdges', { id: randomUUID(), projectId, sourceId: nodeId, targetId: parentNodeId, kind: 'DEPENDS_ON', label: parentBranch ? 'derived research route' : 'research route', createdAt } satisfies GraphEdge);
+      this.db.saveRecord('branches', { id: randomUUID(), projectId, sessionId: session.id, title: proposal.title, objective: proposal.objective, method: proposal.method, status: 'queued', priority: proposal.priority, parentBranchId: parentBranch?.id ?? null, rootNodeId: nodeId, lastStepId: null, findings: [], failures: [], createdAt, updatedAt: createdAt } satisfies ResearchBranch);
     }
   }
 
@@ -341,8 +446,13 @@ export class ResearchOrchestrator {
   }
 
   private pickBranch(branches: ResearchBranch[], session: ResearchSession): ResearchBranch | null {
-    const available = branches.filter((branch) => branch.status !== 'dead-end' && branch.status !== 'complete').sort((a, b) => b.priority - a.priority);
-    return available.length ? available[session.branchCursor % available.length] : null;
+    const available = branches.filter((branch) => branch.status !== 'dead-end' && branch.status !== 'complete');
+    if (!available.length) return null;
+    return available.map((branch, index) => ({
+      branch,
+      score: branch.priority + (branch.status === 'promising' ? 30 : 0) + (branch.status === 'queued' ? 12 : 0)
+        - branch.failures.length * 8 - branch.findings.length * 0.5 - ((index + session.branchCursor) % available.length),
+    })).sort((a, b) => b.score - a.score)[0].branch;
   }
 
   private prepareSession(projectId: string, previous: ResearchSession | undefined, resumeRequested: boolean): ResearchSession {
@@ -361,7 +471,8 @@ export class ResearchOrchestrator {
         cycleIndex: normalized.cycleIndex + 1,
         cycleCheckpointStart: normalized.checkpointCount,
         status: 'RUNNING',
-        nextStage: 'EXPLORE',
+        nextStage: normalized.checkpointReturnStage ?? 'EXPLORE',
+        checkpointReturnStage: null,
         completedAt: null,
         failure: '',
         pauseReason: '',
@@ -373,7 +484,7 @@ export class ResearchOrchestrator {
 
   private newSession(projectId: string): ResearchSession {
     const timestamp = now(); const sessionId = randomUUID();
-    return { id: sessionId, projectId, cycleId: randomUUID(), cycleIndex: 0, cycleCheckpointStart: 0, status: 'RUNNING', currentStage: 'INITIALIZE', nextStage: 'INITIALIZE', iteration: 0, actionCount: 0, checkpointCount: 0, activeBranchId: null, branchCursor: 0, startedAt: timestamp, updatedAt: timestamp, lastCheckpointAt: timestamp, completedAt: null, pauseReason: '', failure: '', totalTokenUsage: 0, totalElapsedMs: 0, conclusion: null };
+    return { id: sessionId, projectId, cycleId: randomUUID(), cycleIndex: 0, cycleCheckpointStart: 0, status: 'RUNNING', currentStage: 'INITIALIZE', nextStage: 'INITIALIZE', checkpointReturnStage: null, iteration: 0, actionCount: 0, checkpointCount: 0, activeBranchId: null, branchCursor: 0, startedAt: timestamp, updatedAt: timestamp, lastCheckpointAt: timestamp, completedAt: null, pauseReason: '', failure: '', totalTokenUsage: 0, totalElapsedMs: 0, conclusion: null };
   }
 
   private writeState(event: ResearchStateLogEntry['event'], session: ResearchSession, resumeRequested: boolean, agentLoopRunning: boolean): void {
@@ -398,6 +509,49 @@ export class ResearchOrchestrator {
   private activity(projectId: string, stage: Activity['stage'], title: string, status: Activity['status'], detail = ''): Activity {
     return { id: randomUUID(), projectId, stage, kind: status === 'failed' ? 'error' : 'agent', title, detail, status, durationMs: null, createdAt: now() };
   }
+}
+
+const reviewSeverity: Record<NonNullable<RoleAction['proofReviews'][number]>['status'], number> = {
+  VALID: 0, REQUIRES_COMPUTATION: 1, REQUIRES_FORMALIZATION: 2, REQUIRES_LEMMA: 3, UNCERTAIN: 4, INVALID: 5,
+};
+
+function mergeIndependentReviews(skeptic: RoleAction, verifier: RoleAction): RoleAction {
+  const skepticReviews = new Map(skeptic.proofReviews.map((item) => [item.stepId, item]));
+  const verifierReviews = new Map(verifier.proofReviews.map((item) => [item.stepId, item]));
+  const stepIds = [...new Set([...skepticReviews.keys(), ...verifierReviews.keys()])];
+  const proofReviews = stepIds.map((stepId) => {
+    const left = skepticReviews.get(stepId);
+    const right = verifierReviews.get(stepId);
+    if (!left || !right) return {
+      stepId, status: 'UNCERTAIN' as const,
+      comment: `Independent-review disagreement: ${left?.comment ?? 'skeptic supplied no review'} | ${right?.comment ?? 'verifier supplied no review'}`,
+    };
+    const status = reviewSeverity[left.status] >= reviewSeverity[right.status] ? left.status : right.status;
+    return { stepId, status, comment: `Skeptic: ${left.comment}\nIndependent verifier: ${right.comment}` };
+  });
+  return {
+    ...skeptic,
+    title: 'Parallel independent proof review',
+    summary: `Skeptic review: ${skeptic.summary}\nIndependent verifier: ${verifier.summary}`,
+    rationaleSummary: 'Two isolated model calls reviewed the same persisted proof. Their decisions were merged conservatively; a missing or conflicting review cannot become VALID.',
+    evidence: [...skeptic.evidence, ...verifier.evidence].slice(0, 30),
+    proposedNodes: [...skeptic.proposedNodes, ...verifier.proposedNodes].slice(0, 30),
+    branches: [...skeptic.branches, ...verifier.branches].slice(0, 12),
+    proofSteps: [...skeptic.proofSteps, ...verifier.proofSteps].slice(0, 50),
+    proofReviews,
+    toolCalls: [...skeptic.toolCalls, ...verifier.toolCalls].slice(0, 8),
+    nativeToolExecutions: [...(skeptic.nativeToolExecutions ?? []), ...(verifier.nativeToolExecutions ?? [])].slice(0, 12),
+    failures: [...skeptic.failures, ...verifier.failures].slice(0, 30),
+    tokenUsage: {
+      input: skeptic.tokenUsage.input + verifier.tokenUsage.input,
+      output: skeptic.tokenUsage.output + verifier.tokenUsage.output,
+      total: skeptic.tokenUsage.total + verifier.tokenUsage.total,
+    },
+  };
+}
+
+function canonicalToolOutput(value: string): string {
+  return value.replace(/\r\n/g, '\n').trim();
 }
 
 const now = () => new Date().toISOString();

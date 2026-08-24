@@ -11,6 +11,7 @@ import type {
   Project,
   ProjectSnapshot,
   ProviderSettings,
+  ResearchJob,
   ResearchSession,
 } from '../src/shared/types';
 import { cosineSimilarity, embedText, lexicalSimilarity, retrievalTerms } from '../src/shared/retrieval';
@@ -31,6 +32,8 @@ const DEFAULT_SETTINGS: ProviderSettings = {
   maxToolSeconds: 20,
   providerTimeoutSeconds: 180,
   maxResearchMinutes: 60,
+  maxAutonomousHours: 168,
+  maxTotalTokens: 2_000_000,
   checkpointEvery: 5,
   maxBranches: 4,
   literatureSearchMode: 'auto',
@@ -169,6 +172,30 @@ export class ResearchDatabase {
         COMMIT;
       `);
     }
+    if (current < 5) {
+      this.db.exec(`
+        BEGIN;
+        CREATE TABLE research_jobs (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE,
+          status TEXT NOT NULL,
+          desired_state TEXT NOT NULL,
+          resume_requested INTEGER NOT NULL DEFAULT 0,
+          attempt_count INTEGER NOT NULL DEFAULT 0,
+          max_attempts INTEGER NOT NULL DEFAULT 5,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL,
+          started_at TEXT,
+          heartbeat_at TEXT,
+          next_run_at TEXT,
+          completed_at TEXT,
+          last_error TEXT NOT NULL DEFAULT ''
+        );
+        CREATE INDEX research_jobs_status_next_run ON research_jobs(status, next_run_at);
+        INSERT INTO schema_migrations(version, applied_at) VALUES (5, datetime('now'));
+        COMMIT;
+      `);
+    }
   }
 
   private rowToProject(row: ProjectRow): Project {
@@ -269,6 +296,56 @@ export class ResearchDatabase {
       }
     }
     return recovered;
+  }
+
+  saveResearchJob(job: ResearchJob): ResearchJob {
+    this.db.prepare(`
+      INSERT INTO research_jobs(
+        id, project_id, status, desired_state, resume_requested, attempt_count, max_attempts,
+        created_at, updated_at, started_at, heartbeat_at, next_run_at, completed_at, last_error
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(project_id) DO UPDATE SET
+        id = excluded.id,
+        status = excluded.status,
+        desired_state = excluded.desired_state,
+        resume_requested = excluded.resume_requested,
+        attempt_count = excluded.attempt_count,
+        max_attempts = excluded.max_attempts,
+        updated_at = excluded.updated_at,
+        started_at = excluded.started_at,
+        heartbeat_at = excluded.heartbeat_at,
+        next_run_at = excluded.next_run_at,
+        completed_at = excluded.completed_at,
+        last_error = excluded.last_error
+    `).run(
+      job.id, job.projectId, job.status, job.desiredState, job.resumeRequested ? 1 : 0,
+      job.attemptCount, job.maxAttempts, job.createdAt, job.updatedAt, job.startedAt,
+      job.heartbeatAt, job.nextRunAt, job.completedAt, job.lastError,
+    );
+    return this.getResearchJob(job.projectId)!;
+  }
+
+  getResearchJob(projectId: string): ResearchJob | null {
+    const row = this.db.prepare('SELECT * FROM research_jobs WHERE project_id = ?').get(projectId) as ResearchJobRow | undefined;
+    return row ? rowToResearchJob(row) : null;
+  }
+
+  listResearchJobs(projectId?: string): ResearchJob[] {
+    const rows = (projectId
+      ? this.db.prepare('SELECT * FROM research_jobs WHERE project_id = ? ORDER BY created_at').all(projectId)
+      : this.db.prepare('SELECT * FROM research_jobs ORDER BY created_at').all()) as unknown as ResearchJobRow[];
+    return rows.map(rowToResearchJob);
+  }
+
+  recoverInterruptedJobs(): number {
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      UPDATE research_jobs
+      SET status = 'QUEUED', resume_requested = 1, updated_at = ?, heartbeat_at = NULL,
+          next_run_at = NULL, last_error = CASE WHEN last_error = '' THEN 'Application restarted while research was active.' ELSE last_error END
+      WHERE desired_state = 'RUNNING' AND status IN ('RUNNING', 'QUEUED', 'RETRY_WAIT')
+    `).run(now);
+    return Number(result.changes);
   }
 
   saveRecord<T extends { id: string; projectId: string }>(collection: CollectionName, record: T): ProjectSnapshot {
@@ -377,6 +454,8 @@ export class ResearchDatabase {
       maxToolSeconds: Math.min(120, Math.max(2, Math.round(settings.maxToolSeconds))),
       providerTimeoutSeconds: Math.min(600, Math.max(120, Math.round(settings.providerTimeoutSeconds || DEFAULT_SETTINGS.providerTimeoutSeconds))),
       maxResearchMinutes: Math.min(720, Math.max(1, Math.round(settings.maxResearchMinutes))),
+      maxAutonomousHours: Math.min(720, Math.max(1, Math.round(settings.maxAutonomousHours || DEFAULT_SETTINGS.maxAutonomousHours))),
+      maxTotalTokens: Math.min(100_000_000, Math.max(10_000, Math.round(settings.maxTotalTokens || DEFAULT_SETTINGS.maxTotalTokens))),
       checkpointEvery: Math.min(100, Math.max(1, Math.round(settings.checkpointEvery))),
       maxBranches: Math.min(12, Math.max(1, Math.round(settings.maxBranches))),
       literatureSearchMode: ['auto', 'manual', 'off'].includes(settings.literatureSearchMode) ? settings.literatureSearchMode : DEFAULT_SETTINGS.literatureSearchMode,
@@ -407,6 +486,21 @@ type DocumentChunkRow = {
   section_text: string; kind: DocumentChunk['kind']; chunk_index: number; character_start: number; character_end: number;
   text_content: string; embedding_json: string; created_at: string;
 };
+
+type ResearchJobRow = {
+  id: string; project_id: string; status: ResearchJob['status']; desired_state: ResearchJob['desiredState'];
+  resume_requested: number; attempt_count: number; max_attempts: number; created_at: string; updated_at: string;
+  started_at: string | null; heartbeat_at: string | null; next_run_at: string | null; completed_at: string | null; last_error: string;
+};
+
+function rowToResearchJob(row: ResearchJobRow): ResearchJob {
+  return {
+    id: row.id, projectId: row.project_id, status: row.status, desiredState: row.desired_state,
+    resumeRequested: row.resume_requested === 1, attemptCount: row.attempt_count, maxAttempts: row.max_attempts,
+    createdAt: row.created_at, updatedAt: row.updated_at, startedAt: row.started_at, heartbeatAt: row.heartbeat_at,
+    nextRunAt: row.next_run_at, completedAt: row.completed_at, lastError: row.last_error,
+  };
+}
 
 function rowToDocumentChunk(row: DocumentChunkRow): DocumentChunk {
   let embedding: number[] = [];

@@ -1,11 +1,12 @@
 import { create } from 'zustand';
-import type { AgentEvent, ChatEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot } from './shared/types';
+import type { AgentEvent, ChatEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot, ResearchJob } from './shared/types';
 
-export type WorkspaceView = 'chat' | 'research' | 'branches' | 'proofs' | 'result' | 'attacks' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
+export type WorkspaceView = 'chat' | 'research' | 'branches' | 'proofs' | 'formal' | 'result' | 'attacks' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
 
 interface AppState {
   projects: Project[];
   snapshot: ProjectSnapshot | null;
+  researchJob: ResearchJob | null;
   view: WorkspaceView;
   selectedNodeId: string | null;
   running: boolean;
@@ -46,6 +47,7 @@ const message = (error: unknown) => error instanceof Error ? error.message : 'Th
 export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   snapshot: null,
+  researchJob: null,
   view: 'notebook',
   selectedNodeId: null,
   running: false,
@@ -62,15 +64,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   async openProject(id) {
     set({ loading: true, error: null });
-    try { const snapshot = await window.research.projects.get(id); set({ snapshot, view: snapshot.project.mode === 'stress-test' ? 'result' : 'research', selectedNodeId: null, running: snapshot.sessions.at(-1)?.status === 'RUNNING', stage: snapshot.sessions.at(-1)?.currentStage ?? 'IDLE', loading: false }); }
+    try {
+      const [snapshot, projectJobs] = await Promise.all([window.research.projects.get(id), window.research.agent.jobs(id)]);
+      const researchJob = projectJobs.at(-1) ?? null;
+      const running = Boolean(researchJob?.desiredState === 'RUNNING' && ['QUEUED', 'RUNNING', 'RETRY_WAIT'].includes(researchJob.status));
+      set({ snapshot, researchJob, view: snapshot.project.mode === 'stress-test' ? 'result' : 'research', selectedNodeId: null, running, stage: snapshot.sessions.at(-1)?.currentStage ?? (running ? 'INITIALIZE' : 'IDLE'), loading: false });
+    }
     catch (error) { set({ error: message(error), loading: false }); }
   },
-  closeProject() { set({ snapshot: null, selectedNodeId: null, running: false, stage: 'IDLE' }); void get().loadProjects(); },
+  closeProject() { set({ snapshot: null, researchJob: null, selectedNodeId: null, running: false, stage: 'IDLE' }); void get().loadProjects(); },
   async createProject(input) {
     set({ loading: true, error: null });
     try {
       const snapshot = await window.research.projects.create(input);
-      set({ snapshot, view: snapshot.project.mode === 'stress-test' ? 'result' : 'research', loading: false });
+      set({ snapshot, researchJob: null, view: snapshot.project.mode === 'stress-test' ? 'result' : 'research', loading: false });
       void get().loadProjects();
     } catch (error) { set({ error: message(error), loading: false }); }
   },
@@ -93,14 +100,19 @@ export const useAppStore = create<AppState>((set, get) => ({
   async refresh() {
     const id = get().snapshot?.project.id;
     if (!id) return;
-    try { set({ snapshot: await window.research.projects.get(id) }); }
+    try {
+      const [snapshot, projectJobs] = await Promise.all([window.research.projects.get(id), window.research.agent.jobs(id)]);
+      const researchJob = projectJobs.at(-1) ?? null;
+      const running = Boolean(researchJob?.desiredState === 'RUNNING' && ['QUEUED', 'RUNNING', 'RETRY_WAIT'].includes(researchJob.status));
+      set({ snapshot, researchJob, running });
+    }
     catch (error) { set({ error: message(error) }); }
   },
   async startAgent() {
     const id = get().snapshot?.project.id;
     if (!id) return;
     set({ running: true, stage: get().snapshot?.project.mode === 'stress-test' ? 'PARSE' : 'INITIALIZE', error: null });
-    try { await window.research.agent.start(id); }
+    try { set({ researchJob: await window.research.agent.start(id) }); }
     catch (error) { set({ error: message(error), running: false, stage: 'IDLE' }); }
   },
   async resumeAgent() {
@@ -108,27 +120,28 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!id) return;
     const nextStage = get().snapshot?.sessions.at(-1)?.nextStage;
     set({ running: true, stage: nextStage === 'PAUSED' ? 'EXPLORE' : nextStage ?? 'INITIALIZE', error: null });
-    try { await window.research.agent.resume(id); }
+    try { set({ researchJob: await window.research.agent.resume(id) }); }
     catch (error) { set({ error: message(error), running: false, stage: 'IDLE' }); }
   },
   async pauseAgent() {
     const id = get().snapshot?.project.id;
     if (!id) return;
-    await window.research.agent.pause(id);
-    set({ running: false, stage: 'PAUSED' });
+    const researchJob = await window.research.agent.pause(id);
+    set({ researchJob, running: false, stage: 'PAUSED' });
     setTimeout(() => { void get().refresh(); }, 250);
   },
   async stopAgent() {
     const id = get().snapshot?.project.id;
     if (!id) return;
-    await window.research.agent.stop(id);
-    set({ running: false, stage: 'IDLE' });
+    const researchJob = await window.research.agent.stop(id);
+    set({ researchJob, running: false, stage: 'IDLE' });
     void get().refresh();
   },
   handleAgentEvent(event) {
     if (event.projectId !== get().snapshot?.project.id) return;
     set({ running: event.running, stage: event.stage, ...(event.stage === 'COMPLETE' && !event.running && get().snapshot?.project.mode === 'stress-test' ? { view: 'result' as WorkspaceView } : {}) });
     if (event.activity && event.activity.status !== 'running') void get().refresh();
+    if (!event.running) setTimeout(() => { void get().refresh(); }, 400);
   },
   handleChatEvent(event) {
     if (event.projectId !== get().snapshot?.project.id) return;

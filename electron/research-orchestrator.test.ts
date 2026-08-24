@@ -40,10 +40,13 @@ describe('research checkpoint resume state machine', () => {
       await orchestrator.run(snapshot.project.id, signal);
       let current = db.getProject(snapshot.project.id, false);
       let session = current.sessions.at(-1)!;
+      expect(session.failure).toBe('');
       expect(session.status).toBe('PAUSED');
       expect(session.nextStage).toBe('PAUSED');
       expect(session.cycleIndex).toBe(0);
       expect(session.checkpointCount).toBe(5);
+      expect(current.researchSteps.some((step) => step.stage === 'PROOF_ATTEMPT')).toBe(true);
+      expect(current.proofs.some((proof) => proof.independentlyReviewed && proof.steps.some((step) => step.verifierComment.includes('Skeptic:') && step.verifierComment.includes('Independent verifier:')))).toBe(true);
 
       const legacySession = { ...session } as Partial<ResearchSession>;
       delete legacySession.cycleId;

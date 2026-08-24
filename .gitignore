@@ -49,6 +49,8 @@ experiment-outputs/
 temporary-experiments/
 runtime/python/
 runtime/cache/
+runtime/mac-*/
+work/
 *.sqlite
 *.sqlite3
 *.db

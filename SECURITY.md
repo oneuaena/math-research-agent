@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Security fixes are applied to the latest `1.1.x` source and release line. Older development builds may not receive backports.
+Security fixes are applied to the latest `1.2.x` source and release line. Older development builds may not receive backports.
 
 ## Reporting a vulnerability
 
@@ -12,7 +12,7 @@ Use the repository host's private vulnerability-reporting feature when it is ena
 
 Include, when safe:
 
-- affected version and Windows version;
+- affected application version, operating system version, and CPU architecture;
 - impact and attack prerequisites;
 - minimal reproduction using synthetic data;
 - affected component and suggested mitigation;

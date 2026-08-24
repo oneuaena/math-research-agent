@@ -1,6 +1,6 @@
 {
   "name": "math-research-agent",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "description": "A reproducible, auditable autonomous research workspace for experimental mathematics and conjecture exploration.",
   "author": "Math Research Agent Contributors",
@@ -21,10 +21,13 @@
     "test:e2e": "playwright test",
     "test:packaged": "node scripts/packaged-smoke.mjs",
     "runtime:prepare": "node scripts/prepare-python-runtime.mjs",
+    "runtime:prepare:mac": "node scripts/prepare-macos-runtime.mjs --arch arm64 && node scripts/prepare-macos-runtime.mjs --arch x64",
     "test:bundled-python": "node scripts/bundled-python-smoke.mjs",
     "test:packaged-runtime": "node scripts/packaged-runtime-smoke.mjs",
+    "test:packaged-autonomy": "node scripts/packaged-autonomy-smoke.mjs",
     "lint": "eslint .",
     "dist": "npm run runtime:prepare && npm run build && electron-builder --win nsis --x64",
+    "dist:mac": "npm run runtime:prepare:mac && npm run build && electron-builder --win dir --x64 && runtime\\python\\python.exe scripts\\build-macos-zips.py",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -82,12 +85,8 @@
         "from": "python",
         "to": "python",
         "filter": [
-          "worker.py"
+          "*.py"
         ]
-      },
-      {
-        "from": "runtime/python",
-        "to": "runtime/python"
       },
       {
         "from": "LICENSE",
@@ -109,7 +108,28 @@
       "target": [
         "nsis"
       ],
-      "artifactName": "Math-Research-Agent-Setup-${version}.${ext}"
+      "artifactName": "Math-Research-Agent-Setup-${version}.${ext}",
+      "extraResources": [
+        {
+          "from": "runtime/python",
+          "to": "runtime/python"
+        }
+      ]
+    },
+    "mac": {
+      "target": [
+        "zip"
+      ],
+      "artifactName": "Math-Research-Agent-${version}-mac-${arch}.${ext}",
+      "category": "public.app-category.education",
+      "minimumSystemVersion": "13.0",
+      "identity": null,
+      "extraResources": [
+        {
+          "from": "runtime/mac-${arch}/python",
+          "to": "runtime/python"
+        }
+      ]
     },
     "nsis": {
       "oneClick": false,

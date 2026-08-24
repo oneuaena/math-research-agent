@@ -11,7 +11,7 @@
 - Review `git status`, tracked files, ignored files, and recent history.
 - Scan for credentials, local paths, logs, SQLite/user data, imports, source maps, installers, and large artifacts.
 - Run `npm audit` and review bundled Python package notices.
-- Keep `runtime/python`, `runtime/cache`, `release`, compiled bundles, and test profiles out of Git.
+- Keep `runtime/python`, `runtime/mac-*`, `runtime/cache`, `work`, `release`, compiled bundles, and test profiles out of Git.
 
 ## 3. Validate source
 
@@ -41,14 +41,21 @@ The preparation script downloads the official CPython 3.12.10 x64 embeddable ZIP
 npm.cmd run dist
 npm.cmd run test:packaged
 npm.cmd run test:packaged-runtime
+npm.cmd run test:packaged-autonomy
+npm.cmd run dist:mac
+node scripts\validate-macos-asars.mjs
 ```
 
 Also install the NSIS executable over an existing synthetic/real local profile, verify user-data preservation and checkpoint counts, and rerun `test:packaged-runtime` against the installed executable with system Python removed from `PATH`.
 
-Record installer and unpacked sizes and calculate:
+Validate both macOS ZIPs for ZIP integrity, architecture-matched Electron/Python/Canvas/scientific native modules, executable modes, framework symlinks, and package-relative/system-only dynamic dependencies. A real macOS launch and Gatekeeper check is still required before describing the macOS packages as dynamically tested.
+
+Record installer, Windows software ZIP, and macOS ZIP sizes and calculate:
 
 ```powershell
 Get-FileHash -Algorithm SHA256 .\release\Math-Research-Agent-Setup-<version>.exe
+Get-FileHash -Algorithm SHA256 .\release\Math-Research-Agent-<version>-mac-arm64.zip
+Get-FileHash -Algorithm SHA256 .\release\Math-Research-Agent-<version>-mac-x64.zip
 ```
 
 Replace all release-note checksum/size placeholders before committing.
@@ -60,7 +67,7 @@ Replace all release-note checksum/size placeholders before committing.
 3. Create an annotated `v<version>` tag.
 4. Push the source branch normally; do not force push.
 5. Push the tag normally.
-6. Create a repository Release from the committed notes and upload only the installer (and optional checksum file).
+6. Create a repository Release from the committed notes and upload the Windows installer, Windows portable-software ZIP, both macOS architecture ZIPs, and checksum file.
 7. Verify the remote asset filename, size, and SHA-256.
 
-The installer is not commercially code-signed. Release notes must disclose the possible SmartScreen “Unknown publisher” warning without instructing users to disable Windows security.
+The Windows installer is not commercially code-signed. The macOS applications are not Apple-notarized or Developer-ID signed. Release notes must disclose SmartScreen/Gatekeeper warnings without instructing users to disable operating-system security.

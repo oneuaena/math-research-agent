@@ -13,6 +13,7 @@ import { LiteratureSearchService } from './literature-search';
 import { ResponsesProvider } from './provider';
 import { buildLatexReport, buildMarkdownReport } from './report';
 import { ResearchStateLog } from './research-state-log';
+import { ResearchJobManager } from './research-job-manager';
 import { ToolRunner } from './tool-runner';
 
 let mainWindow: BrowserWindow | null = null;
@@ -20,8 +21,14 @@ let database: ResearchDatabase;
 let credentials: CredentialStore;
 let tools: ToolRunner;
 let agent: AgentCoordinator;
+let jobs: ResearchJobManager;
 let literature: LiteratureSearchService;
 let chat: ChatService;
+let loginStartupEnabled: boolean | null = null;
+
+const daemonMode = process.argv.includes('--research-daemon');
+const singleInstanceLock = app.requestSingleInstanceLock();
+if (!singleInstanceLock) app.quit();
 
 if (process.env.MRA_TEST_USER_DATA) app.setPath('userData', process.env.MRA_TEST_USER_DATA);
 
@@ -129,10 +136,11 @@ function registerIpc(): void {
   ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => database.saveRecord(collection, record));
   ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => database.removeRecord(collection, id, projectId));
 
-  ipcMain.handle('agent:start', (_event, projectId: string) => agent.start(projectId));
-  ipcMain.handle('agent:resume', (_event, projectId: string) => agent.resume(projectId));
-  ipcMain.handle('agent:pause', (_event, projectId: string) => agent.pause(projectId));
-  ipcMain.handle('agent:stop', (_event, projectId: string) => { tools.stop(projectId); agent.stop(projectId); });
+  ipcMain.handle('agent:start', (_event, projectId: string) => jobs.start(projectId));
+  ipcMain.handle('agent:resume', (_event, projectId: string) => jobs.resume(projectId));
+  ipcMain.handle('agent:pause', (_event, projectId: string) => jobs.pause(projectId));
+  ipcMain.handle('agent:stop', (_event, projectId: string) => jobs.stop(projectId));
+  ipcMain.handle('agent:jobs', (_event, projectId?: string) => jobs.list(projectId));
   ipcMain.handle('tools:run', async (_event, invocation: ToolInvocation) => {
     const started = new Date().toISOString();
     const result = await tools.run(invocation);
@@ -211,6 +219,7 @@ function registerIpc(): void {
 }
 
 app.whenReady().then(async () => {
+  if (!singleInstanceLock) return;
   database = new ResearchDatabase(join(app.getPath('userData'), 'research.sqlite3'));
   database.recoverInterruptedSessions();
   await indexExistingImportedDocuments();
@@ -226,10 +235,26 @@ app.whenReady().then(async () => {
     (entry) => researchStateLog.write(entry),
     literature,
   );
+  jobs = new ResearchJobManager(database, agent, (busy) => {
+    if (app.isPackaged && !process.env.MRA_TEST_USER_DATA && loginStartupEnabled !== busy) {
+      app.setLoginItemSettings({ openAtLogin: busy, path: process.execPath, args: ['--research-daemon'] });
+      loginStartupEnabled = busy;
+    }
+    if (!busy) setTimeout(() => {
+      if (BrowserWindow.getAllWindows().length === 0 && !jobs.isBusy()) app.quit();
+    }, 100);
+  });
   chat = new ChatService(database, credentials, agent, literature, (event) => mainWindow?.webContents.send('chat:event', event));
   registerIpc();
-  createWindow();
+  jobs.initialize();
+  if (!daemonMode) createWindow();
 });
 
-app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
+app.on('second-instance', () => {
+  if (!app.isReady()) return;
+  if (!mainWindow || mainWindow.isDestroyed()) createWindow();
+  else { if (mainWindow.isMinimized()) mainWindow.restore(); mainWindow.show(); mainWindow.focus(); }
+});
+app.on('window-all-closed', () => { if (process.platform !== 'darwin' && !jobs?.isBusy()) app.quit(); });
 app.on('activate', () => { if (BrowserWindow.getAllWindows().length === 0) createWindow(); });
+app.on('before-quit', () => jobs?.shutdown());

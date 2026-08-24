@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import type { Activity, AgentEvent } from '../src/shared/types';
+import type { Activity, AgentEvent, ToolInvocation, ToolResult } from '../src/shared/types';
 import type { CredentialStore } from './credentials';
 import type { ResearchDatabase } from './database';
 import { createProvider } from './provider';
@@ -9,7 +9,7 @@ import type { ToolRunner } from './tool-runner';
 import type { LiteratureSearchService } from './literature-search';
 
 export class AgentCoordinator {
-  private readonly runs = new Map<string, AbortController>();
+  private readonly runs = new Map<string, { controller: AbortController; promise: Promise<void> }>();
 
   constructor(
     private readonly db: ResearchDatabase,
@@ -21,23 +21,29 @@ export class AgentCoordinator {
   ) {}
 
   start(projectId: string): void {
-    this.startRun(projectId, false);
+    void this.startRun(projectId, false);
   }
 
   resume(projectId: string): void {
-    this.startRun(projectId, true);
+    void this.startRun(projectId, true);
   }
 
-  private startRun(projectId: string, resumeRequested: boolean): void {
-    if (this.runs.has(projectId)) return;
+  startAndWait(projectId: string, resumeRequested: boolean): Promise<void> {
+    return this.startRun(projectId, resumeRequested);
+  }
+
+  private startRun(projectId: string, resumeRequested: boolean): Promise<void> {
+    const active = this.runs.get(projectId);
+    if (active) return active.promise;
     const controller = new AbortController();
-    this.runs.set(projectId, controller);
-    void this.run(projectId, controller, resumeRequested);
+    const promise = this.run(projectId, controller, resumeRequested).finally(() => this.runs.delete(projectId));
+    this.runs.set(projectId, { controller, promise });
+    return promise;
   }
 
   pause(projectId: string): void {
     this.tools.stop(projectId);
-    this.runs.get(projectId)?.abort();
+    this.runs.get(projectId)?.controller.abort();
   }
 
   stop(projectId: string): void {
@@ -59,13 +65,11 @@ export class AgentCoordinator {
           this.db.addActivity(activity);
           this.publish({ projectId, running: false, stage: 'IDLE', activity });
         }
-      } finally {
-        this.runs.delete(projectId);
       }
       return;
     }
     try {
-      const provider = createProvider(settings, this.credentials, (invocation) => this.tools.run(invocation));
+      const provider = createProvider(settings, this.credentials, (invocation) => this.executeTool(invocation));
       await new ResearchOrchestrator(this.db, this.tools, provider, this.publish, this.logState, this.literature).run(projectId, controller.signal, { resumeRequested });
     } catch (error) {
       if (controller.signal.aborted) return;
@@ -73,9 +77,24 @@ export class AgentCoordinator {
       const activity = this.activity(projectId, 'IDLE', 'error', message, '', 'failed');
       this.db.addActivity(activity);
       this.publish({ projectId, running: false, stage: 'IDLE', activity });
-    } finally {
-      this.runs.delete(projectId);
     }
+  }
+
+  async executeTool(invocation: ToolInvocation): Promise<ToolResult> {
+    const planned = this.activity(invocation.projectId, 'IDLE', 'tool', `PLANNED: ${invocation.name}`, invocation.purpose, 'info');
+    this.db.addActivity(planned);
+    this.publish({ projectId: invocation.projectId, running: true, stage: 'IDLE', activity: planned });
+    const running = { ...planned, id: randomUUID(), title: `RUNNING: ${invocation.name}`, status: 'running' as const, createdAt: new Date().toISOString() };
+    this.db.addActivity(running);
+    this.publish({ projectId: invocation.projectId, running: true, stage: 'IDLE', activity: running });
+    const result = await this.tools.run(invocation);
+    const detail = result.ok
+      ? `VERIFIED: exit ${result.exitCode ?? 0}; stdout ${(result.stdout ?? '').slice(0, 1_000) || '(empty)'}${result.stderr ? `; stderr ${result.stderr.slice(0, 1_000)}` : ''}`
+      : `FAILED: ${result.error ?? 'tool failure'}; exit ${result.exitCode ?? 'n/a'}; stderr ${(result.stderr ?? '').slice(0, 1_000) || '(empty)'}`;
+    const complete = { ...planned, id: randomUUID(), title: `${result.ok ? 'VERIFIED' : 'FAILED'}: ${invocation.name}`, detail, status: result.ok ? 'succeeded' as const : 'failed' as const, durationMs: result.durationMs, createdAt: new Date().toISOString() };
+    this.db.addActivity(complete);
+    this.publish({ projectId: invocation.projectId, running: true, stage: 'IDLE', activity: complete });
+    return result;
   }
 
   private activity(projectId: string, stage: Activity['stage'], kind: Activity['kind'], title: string, detail: string, status: Activity['status']): Activity {

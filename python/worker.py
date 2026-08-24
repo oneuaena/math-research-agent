@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import ast
+import builtins
 import contextlib
+import collections
 import io
+import itertools
 import json
 import math
+import os
+import random
 import shutil
 import sys
 import traceback
+import types
 
 
 if hasattr(sys.stdin, "reconfigure"):
@@ -18,10 +24,57 @@ if hasattr(sys.stdin, "reconfigure"):
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
 
-ALLOWED_IMPORTS = {"math", "sympy", "numpy", "scipy"}
-BLOCKED_NAMES = {"open", "exec", "eval", "compile", "input", "help", "breakpoint", "__import__"}
+ALLOWED_IMPORTS = {"json", "math", "sympy", "numpy", "scipy", "itertools", "collections", "random", "pickle"}
+BLOCKED_NAMES = {"exec", "eval", "compile", "input", "help", "breakpoint", "__import__"}
 BLOCKED_ATTRS = {"system", "popen", "spawn", "fork", "remove", "unlink", "rmdir", "chdir", "socket", "connect"}
 MAX_CAPTURE_CHARACTERS = 2_000_000
+
+
+class JsonCheckpointCompatibility(types.ModuleType):
+    """A deliberately non-pickle compatibility facade for JSON data only.
+
+    Mathematical jobs sometimes use pickle merely for a dict/list checkpoint.  Real
+    pickle is code-execution capable and must stay unavailable in this worker.  The
+    facade keeps the familiar dump/load API but serializes JSON only; unsupported
+    Python objects fail explicitly instead of weakening the isolation boundary.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("pickle")
+        self.HIGHEST_PROTOCOL = 0
+
+    @staticmethod
+    def dumps(value, protocol=None, *, fix_imports=True, buffer_callback=None):
+        del protocol, fix_imports, buffer_callback
+        return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+    @staticmethod
+    def loads(data, *, fix_imports=True, encoding="ASCII", errors="strict", buffers=()):
+        del fix_imports, encoding, errors, buffers
+        if isinstance(data, bytes):
+            data = data.decode("utf-8")
+        return json.loads(data)
+
+    @classmethod
+    def dump(cls, value, file, protocol=None, *, fix_imports=True, buffer_callback=None):
+        encoded = cls.dumps(value, protocol, fix_imports=fix_imports, buffer_callback=buffer_callback)
+        try:
+            file.write(encoded)
+        except TypeError:
+            file.write(encoded.decode("utf-8"))
+
+    @classmethod
+    def load(cls, file, *, fix_imports=True, encoding="ASCII", errors="strict", buffers=()):
+        return cls.loads(file.read(), fix_imports=fix_imports, encoding=encoding, errors=errors, buffers=buffers)
+
+
+SAFE_PICKLE = JsonCheckpointCompatibility()
+SAFE_IMPORTS = {
+    "itertools": itertools,
+    "collections": collections,
+    "random": random,
+    "pickle": SAFE_PICKLE,
+}
 
 
 class OutputLimitExceeded(RuntimeError):
@@ -37,16 +90,26 @@ class LimitedTextBuffer(io.StringIO):
 
 def validate_code(source: str) -> None:
     tree = ast.parse(source, mode="exec")
+    version_owners: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name.split(".")[0] in {"sympy", "numpy", "scipy"}:
+                    version_owners.add(alias.asname or alias.name.split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and (node.module or "").split(".")[0] in {"sympy", "numpy", "scipy"}:
+            version_owners.add((node.module or "").split(".")[0])
     for node in ast.walk(tree):
         if isinstance(node, (ast.Import, ast.ImportFrom)):
             names = [alias.name.split(".")[0] for alias in node.names] if isinstance(node, ast.Import) else [(node.module or "").split(".")[0]]
             if any(name not in ALLOWED_IMPORTS for name in names):
-                raise ValueError("Only math, SymPy, NumPy, and SciPy imports are allowed.")
+                raise ValueError("Only JSON, math, SymPy, NumPy, and SciPy imports are allowed.")
         if isinstance(node, ast.Name) and node.id in BLOCKED_NAMES:
             raise ValueError(f"Blocked operation: {node.id}")
         if isinstance(node, ast.Attribute) and node.attr in BLOCKED_ATTRS:
             raise ValueError(f"Blocked operation: {node.attr}")
-        if isinstance(node, ast.Attribute) and node.attr.startswith("__"):
+        if isinstance(node, ast.Attribute) and node.attr.startswith("__") and not (
+            node.attr == "__version__" and isinstance(node.value, ast.Name) and node.value.id in version_owners
+        ):
             raise ValueError("Dunder attribute access is not allowed.")
 
 
@@ -67,17 +130,43 @@ def run_python(data: dict) -> dict:
             "exit_code": 1,
             "verification_status": "PROGRAM_FAILURE",
         }
+    compatibility_fallbacks = []
+    for module in ("itertools", "collections", "random", "pickle"):
+        if module in source:
+            compatibility_fallbacks.append(
+                "pickle=>json-checkpoint facade" if module == "pickle" else f"{module}=>safe standard-library facade"
+            )
+
     def safe_import(name, globals=None, locals=None, fromlist=(), level=0):
         if name.split(".")[0] not in ALLOWED_IMPORTS:
             raise ImportError(f"Import not allowed: {name}")
+        root = name.split(".")[0]
+        if root in SAFE_IMPORTS:
+            return SAFE_IMPORTS[root]
         return __import__(name, globals, locals, fromlist, level)
+
+    workspace_root = os.path.realpath(os.getcwd())
+
+    def workspace_open(file, mode="r", buffering=-1, encoding=None, errors=None, newline=None, closefd=True, opener=None):
+        if not isinstance(file, (str, bytes, os.PathLike)):
+            raise PermissionError("Only project-workspace file paths are allowed.")
+        candidate = os.path.realpath(os.path.join(workspace_root, os.fspath(file)))
+        try:
+            inside_workspace = os.path.commonpath([workspace_root, candidate]) == workspace_root
+        except ValueError:
+            inside_workspace = False
+        if not inside_workspace:
+            raise PermissionError("File access must remain inside the project workspace.")
+        if any(flag in mode for flag in ("w", "a", "x", "+")):
+            os.makedirs(os.path.dirname(candidate), exist_ok=True)
+        return builtins.open(candidate, mode, buffering, encoding, errors, newline, closefd, opener)
 
     safe_builtins = {
         "abs": abs, "all": all, "any": any, "bool": bool, "dict": dict,
         "enumerate": enumerate, "float": float, "int": int, "len": len,
         "list": list, "max": max, "min": min, "pow": pow, "print": print,
         "range": range, "round": round, "set": set, "str": str, "sum": sum,
-        "tuple": tuple, "zip": zip, "__import__": safe_import,
+        "tuple": tuple, "zip": zip, "open": workspace_open, "__import__": safe_import,
     }
     namespace = {"__builtins__": safe_builtins, "math": math}
     captured_stdout = LimitedTextBuffer()
@@ -97,6 +186,7 @@ def run_python(data: dict) -> dict:
             "exit_code": 0,
             "verification_status": "SUCCESS",
             "verification_level": "BOUNDED_CHECK",
+            "compatibility_fallbacks": compatibility_fallbacks,
         }
     except OutputLimitExceeded as exc:
         return {

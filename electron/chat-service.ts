@@ -57,8 +57,8 @@ export class ChatService {
         if (route === 'LITERATURE_SEARCH') await this.literature.search(input.projectId, content, controller.signal);
         const context = this.contextBuilder.build(input.projectId, conversation.id, content, userMessage.attachmentSourceIds);
         references = context.references;
-        const provider = this.providerFactory?.() ?? createProvider(this.database.getSettings(), this.credentials);
-        answer = await provider.respondChat(context.messages, controller.signal);
+        const provider = this.providerFactory?.() ?? createProvider(this.database.getSettings(), this.credentials, (invocation) => this.agent.executeTool(invocation));
+        answer = await provider.respondChat(context.messages, controller.signal, input.projectId);
       }
       if (controller.signal.aborted) return this.finishStopped(assistantMessage);
       assistantMessage = { ...assistantMessage, status: 'streaming', updatedAt: new Date().toISOString() };

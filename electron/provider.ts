@@ -33,7 +33,7 @@ export interface ModelProvider {
   runStage(stage: AgentStage, snapshot: ProjectSnapshot, signal: AbortSignal): Promise<StageResult>;
   formalize(snapshot: ProjectSnapshot, signal: AbortSignal): Promise<FormalizationPayload>;
   runRole(request: ProviderRoleRequest, signal: AbortSignal): Promise<RoleAction>;
-  respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal): Promise<string>;
+  respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal, projectId?: string): Promise<string>;
 }
 
 type ErrorPayload = {
@@ -44,7 +44,7 @@ type NativeToolExecutor = (invocation: ToolInvocation) => Promise<ToolResult>;
 
 const nativeToolNames = [
   'run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute',
-  'capability_check', 'z3_check', 'lean_check',
+  'capability_check', 'z3_check', 'lean_check', 'mathlib_search', 'workspace_write', 'workspace_read', 'download_file', 'run_command',
 ] as const satisfies readonly ToolName[];
 
 const nativeToolNameSchema = z.enum(nativeToolNames);
@@ -59,6 +59,11 @@ const nativeToolArgumentSchemas: Record<ToolName, z.ZodType<Record<string, unkno
   capability_check: z.object({ purpose: purposeSchema }).passthrough(),
   z3_check: z.object({ purpose: purposeSchema, smt2: z.string().min(1).max(200_000), timeoutMs: z.number().int().min(1).max(120_000).optional() }).passthrough(),
   lean_check: z.object({ purpose: purposeSchema, code: z.string().min(1).max(100_000), proofId: z.string().uuid().optional(), formalizationOf: z.string().max(8_000).optional() }).passthrough(),
+  mathlib_search: z.object({ purpose: purposeSchema, query: z.string().min(2).max(120) }).passthrough(),
+  workspace_write: z.object({ purpose: purposeSchema, path: z.string().min(1).max(240), content: z.string().max(2_000_000) }).passthrough(),
+  workspace_read: z.object({ purpose: purposeSchema, path: z.string().min(1).max(240) }).passthrough(),
+  download_file: z.object({ purpose: purposeSchema, url: z.string().url().max(4_000), path: z.string().min(1).max(240) }).passthrough(),
+  run_command: z.object({ purpose: purposeSchema, command: z.enum(['python', 'lean']), args: z.array(z.string().min(1).max(4_000)).max(100) }).passthrough(),
 };
 
 const nativeTools = [
@@ -71,6 +76,11 @@ const nativeTools = [
   ['capability_check', 'Report which optional local mathematical verification adapters are available.', { purpose: { type: 'string' } }, ['purpose']],
   ['z3_check', 'Run a bounded SMT-LIB2 satisfiability check. SAT, UNSAT, UNKNOWN, and timeout remain distinct, and the result proves only the supplied encoding.', { purpose: { type: 'string' }, smt2: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1, maximum: 120000 } }, ['purpose', 'smt2']],
   ['lean_check', 'Compile a Lean 4 theorem with Lake and accept the artifact only when the Lean kernel succeeds without sorry, admit, axiom, constant, native_decide, unsafe, or partial escapes. Do not claim that the Lean statement faithfully formalizes a research theorem unless proofId and formalizationOf match an independently reviewed proof record.', { purpose: { type: 'string' }, code: { type: 'string' }, proofId: { type: 'string' }, formalizationOf: { type: 'string' } }, ['purpose', 'code']],
+  ['mathlib_search', 'Search the pinned local Mathlib source for declaration or text fragments. This is local retrieval, not a verification result.', { purpose: { type: 'string' }, query: { type: 'string' } }, ['purpose', 'query']],
+  ['workspace_write', 'Persist UTF-8 research data in this project workspace. Use for scripts, seeds, checkpoints, .few files, JSON, and CSV. Paths must be relative and remain available after app restart.', { purpose: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' } }, ['purpose', 'path', 'content']],
+  ['workspace_read', 'Read a UTF-8 seed, checkpoint, script, .few, JSON, CSV, or other project-workspace file created earlier. Returns actual file content or an error.', { purpose: { type: 'string' }, path: { type: 'string' } }, ['purpose', 'path']],
+  ['download_file', 'Download an HTTP or HTTPS file into this project workspace. Returns the actual saved path, byte count, and SHA-256; verify by calling workspace_read when text is expected.', { purpose: { type: 'string' }, url: { type: 'string' }, path: { type: 'string' } }, ['purpose', 'url', 'path']],
+  ['run_command', 'Run an allow-listed local command in this project workspace. command is python or lean only; args are literal arguments, never a shell string. Captures actual stdout, stderr, exit code, and generated files.', { purpose: { type: 'string' }, command: { type: 'string', enum: ['python', 'lean'] }, args: { type: 'array', items: { type: 'string' } } }, ['purpose', 'command', 'args']],
 ].map(([name, description, properties, required]) => ({
   type: 'function',
   function: { name, description, parameters: { type: 'object', properties, required, additionalProperties: false } },
@@ -135,7 +145,7 @@ const roleActionItemContract = {
   branches: { title: 'string', objective: 'string', method: 'string', priority: 'integer 1..100' },
   proofSteps: { title: 'string', statement: 'string', argument: 'string', dependencies: 'string[]', critical: 'boolean' },
   proofReviews: { stepId: 'string', status: 'VALID|INVALID|UNCERTAIN|REQUIRES_LEMMA|REQUIRES_COMPUTATION|REQUIRES_FORMALIZATION', comment: 'string' },
-  toolCalls: { name: 'run_python|symbolic_simplify|solve_equation|differentiate|integrate|matrix_compute|z3_check|lean_check', purpose: 'string', input: 'object' },
+  toolCalls: { name: 'run_python|symbolic_simplify|solve_equation|differentiate|integrate|matrix_compute|z3_check|lean_check|workspace_write|workspace_read|download_file|run_command', purpose: 'string', input: 'object' },
 };
 
 const localTemplates: Partial<Record<AgentStage, (snapshot: ProjectSnapshot) => StageResult>> = {
@@ -293,8 +303,8 @@ export class ResponsesProvider implements ModelProvider {
     throw this.malformed('Research stage response did not match the required JSON contract.', this.endpoint('/chat/completions'), 0, 200);
   }
 
-  async respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal): Promise<string> {
-    const result = await this.chat(messages, signal, { json: false, maxTokens: 4096, disableThinking: true });
+  async respondChat(messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>, signal: AbortSignal, projectId?: string): Promise<string> {
+    const result = await this.chat(messages, signal, { json: false, maxTokens: 4096, disableThinking: true, nativeToolProjectId: projectId });
     return result.content;
   }
 

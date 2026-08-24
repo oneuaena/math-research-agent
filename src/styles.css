@@ -373,6 +373,36 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
 .save-status { margin-right: auto; color: var(--text-faint); font-size: 10px; }
 .modal-loading { padding: 50px; color: var(--text-faint); text-align: center; }
 
+/* Formal lab */
+.formal-lab { width: min(1020px, calc(100% - 48px)); margin: 0 auto; padding: 23px 0 80px; }
+.formal-kernel { display: inline-flex; align-items: center; gap: 6px; padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--verified) 40%, var(--border)); border-radius: 999px; color: var(--verified); font-size: 9px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.formal-notice, .formal-gaps, .formal-result, .mathlib-search { border: 1px solid var(--border); border-radius: 9px; background: var(--panel); }
+.formal-notice { display: grid; grid-template-columns: 22px 1fr; gap: 10px; margin: 16px 0 12px; padding: 13px 15px; }
+.formal-notice svg { color: var(--accent-strong); }
+.formal-notice div, .formal-gaps div, .mathlib-search header div { display: grid; gap: 4px; }
+.formal-notice strong, .formal-gaps strong, .formal-result strong { font-size: 11px; }
+.formal-notice span, .formal-gaps span, .mathlib-search header span, .formal-actions > span { color: var(--text-faint); font-size: 10px; line-height: 1.45; }
+.formal-templates, .formal-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.formal-templates { margin: 0 0 12px; }
+.formal-editor-grid { display: grid; grid-template-columns: minmax(230px, .66fr) minmax(360px, 1.34fr); gap: 12px; }
+.formal-editor-grid textarea { resize: vertical; }
+.formal-editor-grid .lean-source { min-height: 285px; font: 11px/1.55 "Cascadia Code", Consolas, monospace; }
+.formal-gaps { display: grid; grid-template-columns: 20px 1fr; gap: 9px; margin-top: 12px; padding: 12px 14px; border-color: color-mix(in srgb, var(--warning) 40%, var(--border)); }
+.formal-gaps svg { color: var(--warning); }
+.formal-actions { justify-content: space-between; margin: 14px 0; }
+.formal-actions > span { max-width: 540px; }
+.formal-result { display: grid; gap: 10px; margin: 12px 0; padding: 14px; }
+.formal-result.passed { border-left: 2px solid var(--verified); }
+.formal-result.failed { border-left: 2px solid var(--danger); }
+.formal-result pre, .mathlib-search pre { max-height: 300px; margin: 0; padding: 11px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text-soft); font: 10px/1.5 "Cascadia Code", Consolas, monospace; white-space: pre-wrap; }
+.mathlib-search { margin-top: 16px; padding: 15px; }
+.mathlib-search header { display: grid; grid-template-columns: 21px 1fr; gap: 8px; margin-bottom: 10px; }
+.mathlib-search header svg { color: var(--accent-strong); }
+.mathlib-search h2 { margin: 0; font-size: 12px; }
+.mathlib-search > div { display: flex; gap: 8px; }
+.mathlib-search input { flex: 1; min-width: 0; }
+.mathlib-search pre { margin-top: 12px; }
+
 .error-toast { max-width: 480px; min-height: 42px; padding: 6px 7px 6px 12px; position: fixed; z-index: 200; right: 18px; bottom: 18px; display: flex; align-items: center; gap: 9px; border: 1px solid color-mix(in srgb, var(--danger) 40%, var(--border)); border-radius: 9px; background: var(--panel-raised); box-shadow: var(--shadow); color: var(--danger); }
 .error-toast span { flex: 1; line-height: 1.35; }
 .app-loading, .fatal { height: 100%; display: grid; place-content: center; justify-items: center; background: var(--bg); }
@@ -460,4 +490,5 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
   .workspace-topbar { grid-template-columns: 178px minmax(120px, 1fr) 0 auto; }
   .inspector { display: none; }
   .notebook-view { width: calc(100% - 38px); }
+  .formal-editor-grid { grid-template-columns: 1fr; }
 }

@@ -18,6 +18,7 @@ const api: DesktopApi = {
     resume: (projectId: string) => ipcRenderer.invoke('agent:resume', projectId),
     pause: (projectId: string) => ipcRenderer.invoke('agent:pause', projectId),
     stop: (projectId: string) => ipcRenderer.invoke('agent:stop', projectId),
+    jobs: (projectId?: string) => ipcRenderer.invoke('agent:jobs', projectId),
     onEvent: (callback: (event: AgentEvent) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, payload: AgentEvent) => callback(payload);
       ipcRenderer.on('agent:event', listener);

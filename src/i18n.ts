@@ -8,6 +8,7 @@ const copy = {
   researchSession: ['研究会话', 'Research session'],
   branches: ['研究分支', 'Research branches'],
   proofs: ['结构化证明', 'Structured proofs'],
+  formalLab: ['形式验证', 'Formal lab'],
   proofGraph: ['证明图', 'Proof graph'],
   attackHistory: ['攻击历史', 'Attack history'],
   attackTree: ['攻击树', 'Attack tree'],

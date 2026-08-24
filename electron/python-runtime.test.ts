@@ -11,6 +11,15 @@ describe('Python runtime resolution', () => {
     expect(runtime.displayPath).toBe('resources/runtime/python/python.exe');
   });
 
+  it('uses the architecture-specific bundled executable inside a packaged macOS app', () => {
+    const runtime = resolvePythonRuntime({ packaged: true, resourcesPath: '/Applications/Math Research Agent.app/Contents/Resources', configuredPath: 'python3', platform: 'darwin' });
+    expect(runtime).toMatchObject({
+      source: 'bundled',
+      executable: join('/Applications/Math Research Agent.app/Contents/Resources', 'runtime', 'python', 'bin', 'python3.12'),
+      displayPath: 'resources/runtime/python/bin/python3.12',
+    });
+  });
+
   it('uses the configured interpreter only in development', () => {
     expect(resolvePythonRuntime({ packaged: false, resourcesPath: '', configuredPath: 'py -3.12', platform: 'win32' })).toMatchObject({ source: 'configured', executable: 'py', argsPrefix: ['-3.12'] });
   });

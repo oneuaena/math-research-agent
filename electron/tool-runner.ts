@@ -7,13 +7,14 @@ import type {
   VerificationToolStatus,
 } from '../src/shared/types';
 import { resolvePythonRuntime } from './python-runtime';
-import { probeLeanVersion, resolveLeanRuntime, runLeanVerification } from './tools/lean-adapter';
+import { probeLeanVersion, resolveLeanRuntime, runLeanVerification, searchMathlib } from './tools/lean-adapter';
 import { runBoundedProcess, type ProcessExecution } from './tools/process-runner';
+import { downloadWorkspaceFile, projectWorkspace, readWorkspaceFile, writeWorkspaceFile } from './tools/research-workspace';
 import { inputExtension, VerificationAuditLog } from './tools/verification-audit';
 
 const invocationSchema = z.object({
   projectId: z.string().uuid(),
-  name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check']),
+  name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check', 'mathlib_search', 'workspace_write', 'workspace_read', 'download_file', 'run_command']),
   purpose: z.string().min(1).max(500),
   input: z.record(z.string(), z.unknown()),
 });
@@ -56,7 +57,9 @@ function failure(error: string, errorType: ToolErrorType, durationMs = 0, extra:
 
 function inputText(invocation: ToolInvocation): string {
   if (invocation.name === 'run_python' || invocation.name === 'lean_check') return String(invocation.input.code ?? '');
+  if (invocation.name === 'mathlib_search') return String(invocation.input.query ?? '');
   if (invocation.name === 'z3_check') return String(invocation.input.smt2 ?? '');
+  if (invocation.name === 'workspace_write') return String(invocation.input.content ?? '');
   return JSON.stringify(invocation.input, null, 2);
 }
 
@@ -98,7 +101,11 @@ export class ToolRunner {
     this.controllers.set(invocation.projectId, controller);
     let result: ToolResult;
     try {
-      result = invocation.name === 'lean_check'
+      result = invocation.name === 'workspace_write' || invocation.name === 'workspace_read' || invocation.name === 'download_file'
+        ? await this.runWorkspaceTool(invocation, controller.signal)
+        : invocation.name === 'run_command'
+          ? await this.runCommand(invocation, controller.signal)
+        : invocation.name === 'lean_check'
         ? await runLeanVerification({
             code: String(invocation.input.code ?? ''),
             artifactFile: artifact.inputPath,
@@ -107,6 +114,14 @@ export class ToolRunner {
             timeoutMs: this.settings().maxToolSeconds * 1000,
             signal: controller.signal,
           })
+        : invocation.name === 'mathlib_search'
+          ? await searchMathlib({
+              query: String(invocation.input.query ?? ''),
+              userDataPath: this.userDataPath,
+              configuredPath: this.settings().leanPath,
+              timeoutMs: this.settings().maxToolSeconds * 1000,
+              signal: controller.signal,
+            })
         : await this.runWorker(invocation, controller.signal);
       if (invocation.name === 'capability_check' && result.ok) result = await this.withExternalCapabilities(result);
     } catch (error) {
@@ -117,10 +132,64 @@ export class ToolRunner {
     return this.audit.complete(invocation, result, artifact.directory);
   }
 
+  private workspace(projectId: string): string {
+    const workspace = projectWorkspace(this.userDataPath, projectId);
+    mkdirSync(workspace, { recursive: true });
+    return workspace;
+  }
+
+  private async runWorkspaceTool(invocation: ToolInvocation, signal: AbortSignal): Promise<ToolResult> {
+    const started = performance.now();
+    try {
+      const workspace = this.workspace(invocation.projectId);
+      if (invocation.name === 'workspace_write') {
+        const saved = writeWorkspaceFile(workspace, String(invocation.input.path ?? ''), String(invocation.input.content ?? ''));
+        return { ok: true, success: true, output: JSON.stringify(saved), stdout: `Wrote ${saved.path} (${saved.bytes} bytes).`, stderr: '', errorType: 'NONE', exitCode: 0, workerExitCode: 0, durationMs: Math.round(performance.now() - started), timeout: false, environment: `Project workspace ${workspace}`, verificationStatus: 'SUCCESS', verificationLevel: 'BOUNDED_CHECK' };
+      }
+      if (invocation.name === 'workspace_read') {
+        const read = readWorkspaceFile(workspace, String(invocation.input.path ?? ''));
+        return { ok: true, success: true, output: read.content, stdout: `Read ${read.path} (${read.bytes} bytes, sha256 ${read.sha256}).`, stderr: '', errorType: 'NONE', exitCode: 0, workerExitCode: 0, durationMs: Math.round(performance.now() - started), timeout: false, environment: `Project workspace ${workspace}`, verificationStatus: 'SUCCESS', verificationLevel: 'BOUNDED_CHECK' };
+      }
+      const downloaded = await downloadWorkspaceFile(workspace, String(invocation.input.url ?? ''), String(invocation.input.path ?? ''), signal);
+      return { ok: true, success: true, output: JSON.stringify(downloaded), stdout: `Downloaded ${downloaded.path} (${downloaded.bytes} bytes, sha256 ${downloaded.sha256}).`, stderr: '', errorType: 'NONE', exitCode: 0, workerExitCode: 0, durationMs: Math.round(performance.now() - started), timeout: false, environment: `Project workspace ${workspace}`, verificationStatus: 'SUCCESS', verificationLevel: 'BOUNDED_CHECK' };
+    } catch (error) {
+      return failure(error instanceof Error ? error.message : String(error), signal.aborted ? 'TOOL_ERROR' : 'PROGRAM_ERROR', Math.round(performance.now() - started));
+    }
+  }
+
+  private async runCommand(invocation: ToolInvocation, signal: AbortSignal): Promise<ToolResult> {
+    const started = performance.now();
+    const command = String(invocation.input.command ?? '');
+    const argsValue = invocation.input.args;
+    if (!['python', 'lean'].includes(command) || !Array.isArray(argsValue) || argsValue.some((item) => typeof item !== 'string' || item.length > 4_000)) return failure('Invalid allow-listed command invocation.', 'VALIDATION_ERROR');
+    const workspace = this.workspace(invocation.projectId);
+    for (const argument of argsValue) {
+      if (argument.includes('\0')) return failure('Command arguments must not contain NUL bytes.', 'VALIDATION_ERROR');
+      if (/^(?:[A-Za-z]:)?[\\/]/.test(argument) || argument.split(/[\\/]/).includes('..')) return failure('Command arguments must stay within the project workspace.', 'VALIDATION_ERROR');
+    }
+    const python = command === 'python' ? this.runtime() : null;
+    const lean = command === 'lean' ? resolveLeanRuntime(this.settings().leanPath) : null;
+    if (lean && !lean.available) return failure('Lean is unavailable. Configure a Lean executable before running it.', 'UNAVAILABLE', Math.round(performance.now() - started));
+    if (python?.source === 'bundled' && !existsSync(python.executable)) return failure(`Bundled Python runtime is missing or damaged at ${python.displayPath}. Reinstall Math Research Agent.`, 'UNAVAILABLE', Math.round(performance.now() - started));
+    const executable = python?.executable ?? lean?.leanExecutable;
+    if (!executable) return failure(`${command} executable is unavailable.`, 'UNAVAILABLE', Math.round(performance.now() - started));
+    const execution = await runBoundedProcess({
+      executable,
+      args: [...(python?.argsPrefix ?? []), ...argsValue],
+      cwd: workspace,
+      env: { ...process.env, PATH: [dirname(executable), process.env.PATH].filter(Boolean).join(delimiter), PYTHONIOENCODING: 'utf-8', PYTHONUTF8: '1', PYTHONNOUSERSITE: '1', PYTHONDONTWRITEBYTECODE: '1' },
+      timeoutMs: this.settings().maxToolSeconds * 1000,
+      maxOutputBytes: 4 * 1024 * 1024,
+      signal,
+    });
+    const failed = processFailure(execution, `${command} could not start`);
+    if (failed) return failed;
+    return { ok: true, success: true, output: execution.stdout || 'Command completed with no stdout.', stdout: execution.stdout, stderr: execution.stderr, errorType: 'NONE', exitCode: execution.exitCode, workerExitCode: execution.exitCode, durationMs: execution.durationMs, timeout: false, environment: `${command} in project workspace ${workspace}`, verificationStatus: 'SUCCESS', verificationLevel: 'BOUNDED_CHECK' };
+  }
+
   private async runWorker(invocation: ToolInvocation, signal: AbortSignal): Promise<ToolResult> {
     const started = performance.now();
-    const workspace = join(this.userDataPath, 'tool-workspaces', invocation.projectId);
-    mkdirSync(workspace, { recursive: true });
+    const workspace = this.workspace(invocation.projectId);
     const worker = app.isPackaged ? join(process.resourcesPath, 'python', 'worker.py') : join(app.getAppPath(), 'python', 'worker.py');
     const runtime = this.runtime();
     if (runtime.source === 'bundled' && !existsSync(runtime.executable)) {

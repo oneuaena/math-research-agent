@@ -32,6 +32,8 @@ The self-contained Windows installer bundles the following runtime components ou
 | SciPy | Scientific routines | 1.17.1 | BSD-3-Clause and bundled runtime notices |
 | z3-solver | SMT adapter | 4.15.4.0 | MIT |
 
+The self-contained macOS Apple Silicon and Intel packages bundle CPython 3.12.14, SymPy 1.14.0, mpmath 1.3.0, NumPy 2.4.6, SciPy 1.17.1, and z3-solver 4.15.4.0. They also bundle the matching Darwin native binary from `@napi-rs/canvas` 0.1.80 (MIT) for document rendering. Upstream license files and package metadata remain in the packaged runtime or Electron resources.
+
 The bundled SciPy/NumPy wheels may include native numerical runtimes and GCC runtime components. Where GPL-3.0-or-later code is present, it is covered by the GCC Runtime Library Exception, which permits eligible generated target code to be distributed under terms of the distributor's choice. Full upstream notices remain in the bundled `.dist-info/licenses` directories. The project's Apache-2.0 license does not relicense these components.
 
 Lean, SageMath, DeepSeek, OpenAI, Anthropic, and other provider or tool names are factual compatibility references only. Lean 4/Lake is supported as an external executable (v4.32.0 was used for the v1.1.0 validation) and remains under its upstream Apache-2.0 license; it is not bundled. SageMath and model-provider services are not bundled, owned, or endorsed by this project.
