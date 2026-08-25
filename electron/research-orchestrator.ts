@@ -69,7 +69,9 @@ export class ResearchOrchestrator {
         // Steering is deliberately checked at a safe stage boundary. Any
         // urgent steering received while a worker/tool was running is applied
         // here after that job has checkpointed or observed cancellation.
-        const steering = new ResearchSteeringService(this.db).applyPending(projectId, session);
+        const steeringService = new ResearchSteeringService(this.db);
+        await steeringService.resolveUnclassified(projectId, this.provider, signal);
+        const steering = steeringService.applyPending(projectId, session);
         session = steering.session;
         if (steering.replan && session.status !== 'PAUSED') session = { ...session, nextStage: 'REPLAN', updatedAt: now() };
         this.db.saveRecord('sessions', session);
@@ -86,7 +88,9 @@ export class ResearchOrchestrator {
         const branch = this.pickBranch(snapshot.branches, session);
         const { action, specification } = await this.executeStage(stage, snapshot, branch, signal);
         if (signal.aborted) break;
-        const afterStageSteering = new ResearchSteeringService(this.db).applyPending(projectId, session);
+        const afterStageService = new ResearchSteeringService(this.db);
+        await afterStageService.resolveUnclassified(projectId, this.provider, signal);
+        const afterStageSteering = afterStageService.applyPending(projectId, session);
         session = afterStageSteering.session;
         if (afterStageSteering.replan && session.status !== 'PAUSED') session = { ...session, nextStage: 'REPLAN', updatedAt: now() };
         this.db.saveRecord('sessions', session);

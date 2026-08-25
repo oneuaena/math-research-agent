@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { ClaimVersion, Conversation, ConversationMessage, ResearchBranch, ResearchEvidence, ResearchNode, ResearchSession, SteeringAuditEntry, SteeringInstruction, SteeringInstructionType } from '../src/shared/types';
 import type { ResearchDatabase } from './database';
+import type { ModelProvider } from './provider';
 
 const NOW = () => new Date().toISOString();
 const STOP_TYPES = new Set<SteeringInstructionType>(['PAUSE_RESEARCH', 'STOP_DISCOVERY_SEARCH', 'STOP_PROOF_SEARCH', 'PAUSE_BRANCH', 'ABANDON_BRANCH']);
@@ -31,6 +32,30 @@ export class ResearchSteeringService {
     this.db.saveRecord('steeringInstructions', instruction);
     this.recordConversation(projectId, instruction);
     return instruction;
+  }
+
+  /** Resolve ambiguous text only at a safe orchestration boundary. */
+  async resolveUnclassified(projectId: string, provider: ModelProvider, signal: AbortSignal): Promise<void> {
+    const pending = this.db.listRecords<SteeringInstruction>(projectId, 'steeringInstructions')
+      .filter((instruction) => instruction.status === 'PENDING' && instruction.type === 'UNCLASSIFIED');
+    for (const instruction of pending) {
+      if (signal.aborted) return;
+      const response = await provider.respondChat([
+        { role: 'system', content: 'Interpret one live mathematical-research steering message. Return JSON only: {"type":"one allowed SteeringInstructionType","payload":{},"targetBranchId":null,"explanation":"short"}. Allowed types: ADD_HYPOTHESIS, ADD_BRANCH, PRIORITIZE_BRANCH, DEPRIORITIZE_BRANCH, PAUSE_BRANCH, ABANDON_BRANCH, RESUME_BRANCH, REQUEST_REPLAN, REQUEST_EXPLANATION, ADD_EVIDENCE, RETRACT_EVIDENCE, ADD_CONSTRAINT, REMOVE_CONSTRAINT, CHANGE_SEARCH_STRATEGY, CHANGE_DISCOVERY_PARAMETERS, CHANGE_RESOURCE_BUDGET, PRIORITIZE_LEMMA, START_DISCOVERY_SEARCH, STOP_DISCOVERY_SEARCH, START_PROOF_SEARCH, STOP_PROOF_SEARCH, PAUSE_RESEARCH, RESUME_RESEARCH, CREATE_CLAIM_VERSION, REQUEST_STATUS_UPGRADE, UNCLASSIFIED. Never claim or request VERIFIED; ordinary new theorem statements should be ADD_HYPOTHESIS or CREATE_CLAIM_VERSION.' },
+        { role: 'user', content: instruction.rawText },
+      ], signal, projectId);
+      const parsed = parseModelInterpretation(response);
+      if (!parsed) continue;
+      this.db.saveRecord('steeringInstructions', {
+        ...instruction,
+        type: parsed.type,
+        payload: { ...instruction.payload, ...parsed.payload },
+        targetBranchId: parsed.targetBranchId ?? instruction.targetBranchId,
+        priority: isUrgentSteering(parsed.type) ? 'URGENT' : ['REQUEST_REPLAN', 'CHANGE_RESOURCE_BUDGET'].includes(parsed.type) ? 'HIGH' : 'NORMAL',
+        interpretation: parsed.explanation,
+        interpretationSource: 'MODEL',
+      });
+    }
   }
 
   /** Called at every orchestrator boundary; returns a deterministic replan hint. */
@@ -158,4 +183,20 @@ function interpret(rawText: string): { type: SteeringInstructionType; source: 'R
   const value = rawText.toLowerCase();
   const type: SteeringInstructionType = /暂停|pause/.test(value) ? 'PAUSE_RESEARCH' : /继续|resume/.test(value) ? 'RESUME_RESEARCH' : /放弃|abandon/.test(value) ? 'ABANDON_BRANCH' : /重新规划|replan/.test(value) ? 'REQUEST_REPLAN' : /证据.*撤|retract.*evidence/.test(value) ? 'RETRACT_EVIDENCE' : /证明.*搜索|proof.*search/.test(value) ? 'START_PROOF_SEARCH' : /搜索|discovery/.test(value) ? 'START_DISCOVERY_SEARCH' : /分支|branch/.test(value) ? 'ADD_BRANCH' : /解释|why|what are you doing/.test(value) ? 'REQUEST_EXPLANATION' : 'UNCLASSIFIED';
   return { type, source: 'RULE_FALLBACK', explanation: `Rule fallback interpreted the preserved user text as ${type}.` };
+}
+
+function parseModelInterpretation(value: string): { type: SteeringInstructionType; payload: Record<string, unknown>; targetBranchId?: string | null; explanation: string } | null {
+  const match = value.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try {
+    const parsed = JSON.parse(match[0]) as { type?: unknown; payload?: unknown; targetBranchId?: unknown; explanation?: unknown };
+    const types: SteeringInstructionType[] = ['ADD_HYPOTHESIS', 'ADD_BRANCH', 'PRIORITIZE_BRANCH', 'DEPRIORITIZE_BRANCH', 'PAUSE_BRANCH', 'ABANDON_BRANCH', 'RESUME_BRANCH', 'REQUEST_REPLAN', 'REQUEST_EXPLANATION', 'ADD_EVIDENCE', 'RETRACT_EVIDENCE', 'ADD_CONSTRAINT', 'REMOVE_CONSTRAINT', 'CHANGE_SEARCH_STRATEGY', 'CHANGE_DISCOVERY_PARAMETERS', 'CHANGE_RESOURCE_BUDGET', 'PRIORITIZE_LEMMA', 'START_DISCOVERY_SEARCH', 'STOP_DISCOVERY_SEARCH', 'START_PROOF_SEARCH', 'STOP_PROOF_SEARCH', 'PAUSE_RESEARCH', 'RESUME_RESEARCH', 'CREATE_CLAIM_VERSION', 'REQUEST_STATUS_UPGRADE', 'UNCLASSIFIED'];
+    if (typeof parsed.type !== 'string' || !types.includes(parsed.type as SteeringInstructionType)) return null;
+    return {
+      type: parsed.type as SteeringInstructionType,
+      payload: parsed.payload && typeof parsed.payload === 'object' && !Array.isArray(parsed.payload) ? parsed.payload as Record<string, unknown> : {},
+      targetBranchId: typeof parsed.targetBranchId === 'string' || parsed.targetBranchId === null ? parsed.targetBranchId : undefined,
+      explanation: typeof parsed.explanation === 'string' ? parsed.explanation.slice(0, 1_000) : `Model interpreted the preserved user text as ${parsed.type}.`,
+    };
+  } catch { return null; }
 }

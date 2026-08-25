@@ -1,5 +1,20 @@
 # Changelog
 
+## [2.1.0] - 2026-08-25
+
+### Human-in-the-Loop live research steering
+
+- Added a durable session-scoped research conversation and an audited `SteeringInstruction` queue. Messages sent while autonomous research is running become first-class research inputs rather than unrelated chat.
+- Added structured branch, hypothesis, claim-version, evidence, constraint, strategy, discovery/proof search, budget, explanation, pause, resume, and replan commands. Ambiguous text is model-interpreted at a safe orchestration boundary when a provider is configured; invalid/unavailable responses retain the raw text and use a conservative auditable fallback.
+- The orchestrator checks steering at stage transitions and post-stage checkpoints. Stop/pause commands cooperatively abort active work, preserve completed results/checkpoints, pause discovery or formal proof search state, and prevent a same-batch resume from silently cancelling an urgent pause.
+- Claim mutations create immutable claim versions, and existing Formal Bindings stay attached to their original claim version. Steering cannot promote any claim, evidence, or proof to `VERIFIED`.
+- Evidence retraction retains an audit record, marks evidence `RETRACTED`, invalidates dependent nodes, and blocks the affected branch for re-evaluation.
+- Added live Research-page conversation history, current stage/branch/job/candidate metrics, pending steering queue, and state-grounded explanation responses.
+
+### Verification
+
+- Added regression coverage for live branch mutation, priority/abandonment, claim-binding isolation, evidence retraction, fake verification rejection, conflicting rapid commands, discovery/proof stop checkpoints, restart/resume, and model interpretation of ambiguous steering text.
+
 ## [2.0.0] - 2026-08-25
 
 ### Discovery and research loop

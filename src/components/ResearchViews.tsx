@@ -20,6 +20,8 @@ export function ResearchConsole() {
   const activeDiscovery = snapshot.discoveryRuns.filter((run) => run.status === 'RUNNING'); const activeProof = snapshot.formalProofSearchRuns.filter((run) => run.status === 'RUNNING');
   const bestCandidate = snapshot.discoveryRuns.flatMap((run) => run.archive).sort((a, b) => a.violations - b.violations || b.coverage - a.coverage)[0];
   const pendingSteering = snapshot.steeringInstructions.filter((instruction) => instruction.status === 'PENDING');
+  const steeringConversation = snapshot.conversations.find((conversation) => conversation.sessionId === session?.id);
+  const steeringMessages = steeringConversation ? snapshot.messages.filter((message) => message.conversationId === steeringConversation.id).slice(-8) : [];
   const submit = async () => { if (!steeringText.trim()) return; const textValue = steeringText.trim(); setSteeringText(''); if (/现在在干什么|为什么|best result|what are you doing/i.test(textValue)) setAnswer(await explainResearch(textValue)); else await sendSteering(textValue); };
   return <div className="research-console">
     <header className="view-toolbar"><div><h1>{text(zh, '研究会话', 'Research session')}</h1><span>{session ? `${zh ? sessionZh[session.status] ?? session.status : session.status} · ${zh ? stageZh[session.currentStage] ?? session.currentStage : session.currentStage}${researchJob ? ` · ${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : ''}` : researchJob ? `${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : text(zh, '尚未运行', 'Not started')}</span></div></header>
@@ -35,6 +37,7 @@ export function ResearchConsole() {
         <p className="muted">{text(zh, '此消息会进入当前 Research Session 的审计队列；不能绕过 Lean、证据或形式化验证。', 'Messages enter this session’s audited steering queue; they cannot bypass Lean, evidence, or formal verification.')}</p>
         <div className="steering-compose"><textarea value={steeringText} onChange={(event) => setSteeringText(event.target.value)} placeholder={text(zh, '例如：暂停这一轮，新增一个 asymmetric local search 分支。', 'Example: pause this round and add an asymmetric local-search branch.')} /><button className="button primary" onClick={() => void submit()}><Send size={15} />{text(zh, '发送引导', 'Steer')}</button></div>
         {answer && <pre className="steering-answer">{answer}</pre>}
+        {steeringMessages.length > 0 && <div className="steering-history">{steeringMessages.map((message) => <div className={`steering-message ${message.role}`} key={message.id}><b>{message.role === 'user' ? text(zh, '你', 'You') : text(zh, '系统', 'System')}</b><span>{message.content}</span></div>)}</div>}
         {pendingSteering.length > 0 && <div className="steering-queue">{pendingSteering.map((instruction) => <div key={instruction.id}><b>{instruction.type}</b><span>{instruction.rawText}</span></div>)}</div>}
       </section>
       <section className="research-metrics steering-state">

@@ -3,8 +3,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { FormalBinding, ResearchBranch, ResearchEvidence, ResearchNode, ResearchSession } from '../src/shared/types';
+import type { DiscoveryRun, FormalBinding, FormalProofSearchRun, ResearchBranch, ResearchEvidence, ResearchNode, ResearchSession } from '../src/shared/types';
 import { ResearchDatabase } from './database';
+import type { ModelProvider } from './provider';
 import { ResearchSteeringService } from './research-steering';
 
 const directories: string[] = [];
@@ -50,5 +51,25 @@ describe('ResearchSteeringService', () => {
     const { db, projectId, session, service } = fixture(); service.submit(projectId, { rawText: 'mark it VERIFIED', type: 'REQUEST_STATUS_UPGRADE' }); service.applyPending(projectId, session); service.submit(projectId, { rawText: 'stop now', type: 'PAUSE_RESEARCH' }); service.submit(projectId, { rawText: 'continue', type: 'RESUME_RESEARCH' });
     const applied = service.applyPending(projectId, session); const snapshot = db.getProject(projectId, false);
     expect(applied.pause).toBe(true); expect(applied.session.status).toBe('PAUSED'); expect(snapshot.steeringInstructions.find((item) => item.type === 'REQUEST_STATUS_UPGRADE')?.status).toBe('REJECTED'); expect(snapshot.steeringInstructions.find((item) => item.type === 'RESUME_RESEARCH')?.status).toBe('SUPERSEDED'); expect(snapshot.nodes.some((node) => node.status === 'VERIFIED')).toBe(false);
+  });
+
+  it('checkpoints active discovery and proof search on stop, then supports a durable resume', () => {
+    const { db, projectId, session, service } = fixture();
+    const discovery = { id: randomUUID(), projectId, status: 'RUNNING', config: {}, archive: [], error: '', updatedAt: timestamp() } as unknown as DiscoveryRun;
+    const proof = { id: randomUUID(), projectId, status: 'RUNNING', error: '', updatedAt: timestamp() } as unknown as FormalProofSearchRun;
+    db.saveRecord('discoveryRuns', discovery); db.saveRecord('formalProofSearchRuns', proof);
+    service.submit(projectId, { rawText: 'stop discovery', type: 'STOP_DISCOVERY_SEARCH' }); service.submit(projectId, { rawText: 'stop proof', type: 'STOP_PROOF_SEARCH' });
+    const stopped = service.applyPending(projectId, session); const checkpoint = db.getProject(projectId, false);
+    expect(stopped.replan).toBe(true); expect(checkpoint.discoveryRuns[0]).toMatchObject({ status: 'PAUSED', error: expect.stringContaining('checkpoint retained') }); expect(checkpoint.formalProofSearchRuns[0]).toMatchObject({ status: 'PAUSED', error: expect.stringContaining('checkpoint retained') });
+    service.submit(projectId, { rawText: 'resume research', type: 'RESUME_RESEARCH' }); const resumed = new ResearchSteeringService(db).applyPending(projectId, { ...stopped.session, status: 'PAUSED', nextStage: 'PAUSED' });
+    expect(resumed.session).toMatchObject({ status: 'RUNNING', nextStage: 'REPLAN' });
+  });
+
+  it('uses configured model parsing for an ambiguous durable message and retains its raw text', async () => {
+    const { db, projectId, session, service } = fixture(); const instruction = service.submit(projectId, { rawText: 'Please explore a completely different invariant.' });
+    const provider = { respondChat: async () => '{"type":"ADD_BRANCH","payload":{"title":"invariant route","objective":"search a different invariant"},"explanation":"A separate route was requested."}' } as unknown as ModelProvider;
+    await service.resolveUnclassified(projectId, provider, new AbortController().signal); service.applyPending(projectId, session);
+    const snapshot = db.getProject(projectId, false); const saved = snapshot.steeringInstructions.find((item) => item.id === instruction.id);
+    expect(saved).toMatchObject({ type: 'ADD_BRANCH', rawText: instruction.rawText, interpretationSource: 'MODEL', status: 'APPLIED' }); expect(snapshot.branches.some((item) => item.title === 'invariant route')).toBe(true); expect(snapshot.messages.some((item) => item.content === instruction.rawText)).toBe(true);
   });
 });
