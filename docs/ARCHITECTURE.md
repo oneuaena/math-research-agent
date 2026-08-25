@@ -21,6 +21,16 @@ Math Research Agent is an Electron application with three execution boundaries:
 
 The database enables foreign keys, WAL mode, and normal synchronous durability. On startup, sessions left as `RUNNING` are converted to `PAUSED` while retaining `nextStage`, so resume continues from the persisted cursor.
 
+Discovery runs use the same typed-record store. A run persists its normalized finite problem, fixed search configuration, generation, exact PRNG state, current population, evaluated count, and bounded Pareto archive after every completed generation. At startup, a discovery record left `RUNNING` becomes `PAUSED`; no in-memory work is silently represented as completed.
+
+## Finite-construction discovery engine
+
+`DiscoveryEngine` is intentionally a constrained search substrate rather than a free-form code executor. Its input is a finite universe, a target selection cardinality, forbidden pairs, and coverage groups. Its fixed evaluator computes four auditable objectives: forbidden-pair violations (minimize), covered groups (maximize), selected-index spread (maximize), and distance to the archive (maximize).
+
+For each generation it evaluates a seeded population in a bounded Node `worker_threads` pool (1–32), computes non-dominated fronts, retains a bounded archive, then creates the next population through deterministic parent selection, recombination, and mutation. Worker payloads are data only; neither renderer, model, nor user supplied JavaScript/Python is evaluated. Cancelling terminates active workers, persists `PAUSED`, and makes the saved state resumable.
+
+This is computational candidate generation, not a proof engine. It does not certify the original-language question, run SAT/Lean automatically, or provide a distributed worker fleet; those boundaries are displayed and retained in the stored run.
+
 ## Research orchestrator
 
 The orchestrator selects a role for each stage, asks the configured provider for a schema-validated action, runs permitted mathematical tools, persists evidence and graph artifacts, updates proof reviews, chooses the next stage, and enforces iteration/time/branch/checkpoint budgets.

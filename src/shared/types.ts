@@ -578,6 +578,54 @@ export interface StressTestResult {
   completedAt: string | null;
 }
 
+/**
+ * A finite construction problem deliberately has no executable user code.  The
+ * evaluator is fixed and auditable: minimize forbidden pairs while maximizing
+ * coverage and spread of the selected finite set.
+ */
+export interface DiscoveryProblem {
+  universeSize: number;
+  candidateSize: number;
+  incompatibilities: Array<[number, number]>;
+  coverageGroups: number[][];
+}
+
+export interface DiscoveryConfig {
+  populationSize: number;
+  generations: number;
+  workerCount: number;
+  seed: number;
+  mutationRate: number;
+  archiveLimit: number;
+}
+
+export interface DiscoveryCandidate {
+  fingerprint: string;
+  genes: number[];
+  violations: number;
+  coverage: number;
+  spread: number;
+  novelty: number;
+  paretoRank: number;
+}
+
+export interface DiscoveryRun {
+  id: string;
+  projectId: string;
+  status: 'RUNNING' | 'COMPLETED' | 'PAUSED' | 'FAILED';
+  problem: DiscoveryProblem;
+  config: DiscoveryConfig;
+  generation: number;
+  totalEvaluated: number;
+  population: number[][];
+  archive: DiscoveryCandidate[];
+  rngState: number;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  error: string;
+}
+
 export interface Activity {
   id: string;
   projectId: string;
@@ -601,6 +649,7 @@ export interface ProjectSnapshot {
   sources: Source[];
   attacks: AttackRecord[];
   stressResults: StressTestResult[];
+  discoveryRuns: DiscoveryRun[];
   specifications: StructuredSpecification[];
   formalBindings: FormalBinding[];
   sessions: ResearchSession[];
@@ -670,7 +719,7 @@ export interface CredentialStatus { configured: boolean; masked: string; secureS
 
 export type CollectionName = 'blocks' | 'nodes' | 'propositions' | 'experiments' | 'memories' | 'failedAttempts' | 'sources' | 'attacks' | 'stressResults'
   | 'specifications' | 'sessions' | 'researchSteps' | 'branches' | 'evidence' | 'graphEdges' | 'proofs'
-  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings';
+  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings' | 'discoveryRuns';
 
 export interface AgentEvent {
   projectId: string;
@@ -739,6 +788,11 @@ export interface DesktopApi {
   formalBindings: {
     freezeUserConfirmed(projectId: string, originalStatement: string, formalIr: string, leanSource: string): Promise<FormalBinding>;
     verify(projectId: string, bindingId: string, leanSource: string): Promise<FormalBindingValidation>;
+  };
+  discovery: {
+    start(projectId: string, input: { problem: DiscoveryProblem; config: DiscoveryConfig }): Promise<DiscoveryRun>;
+    resume(projectId: string, runId: string): Promise<DiscoveryRun>;
+    stop(projectId: string): Promise<DiscoveryRun | null>;
   };
   documents: {
     import(projectId: string): Promise<ProjectSnapshot | null>;

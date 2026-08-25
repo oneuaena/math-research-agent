@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.3.0] - 2026-08-25
+
+### Added
+
+- Added the P0 finite-construction Discovery Engine: deterministic populations, mutation, recombination, nondominated Pareto ranking, novelty scoring, and a bounded candidate archive.
+- Added a Construction Discovery workspace with a schema-checked zero-based finite-universe input, per-run seed, generation/population budget, worker cap, archive result, and clear non-proof labelling.
+- Candidate evaluation now runs in a real, bounded Node worker-thread pool (1–32 workers). Each completed generation is checkpointed in SQLite; pause, resume, and restart recovery preserve the exact next state and PRNG state.
+
+### Safety
+
+- The discovery evaluator is fixed and auditable. It accepts finite selections, incompatible pairs, and coverage groups only; it never runs a model- or user-supplied evaluator program.
+- Added reproducibility, pause/resume, malformed-input, bounds, and worker-cleanup regression tests. Discovery output is retained as computational candidate evidence and cannot promote a natural-language claim to `FORMALLY VERIFIED`.
+
 ## [1.2.2] - 2026-08-25
 
 ### Fixed

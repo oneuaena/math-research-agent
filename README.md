@@ -12,13 +12,13 @@ This is an independent open-source project. References to OpenAI-compatible APIs
 
 ### Windows 10/11 x64
 
-- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-Setup-1.2.2.exe)** — SHA-256 `073AF6569F27441150B15C2A191CFF5CBD333DF6D4289359B029287088E4173D`
-- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-Windows-Software.zip)** — SHA-256 `B7B9329683450A1C3F4BCA0709F58542DB094B1897C4E08ECCC1258C6604CCE1`
+- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-Setup-1.3.0.exe)** — SHA-256 `A30B584C05B436FECCF256015AF0B52CB6F4364B78CE25BCEC253C6072094410`
+- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-Windows-Software.zip)** — SHA-256 `19F3A5FC63EDB46757F2F040CE95A0480C731A9A0AD78D695B942969298C5F1C`
 
 ### macOS 13 or newer
 
-- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-arm64.zip)** — SHA-256 `2A68734E6CACE11D04AD61FF0627FEC53EC7128909E9384B0A9C9F031BE8ACD0`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-x64.zip)** — SHA-256 `3912D8D9076867E28326E42D712CDC324C199E56693BB3FB1051134E5DD18888`
+- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-arm64.zip)** — SHA-256 `02AD3A7DA3B4EDC4A1DB79B1B8CA1B408021F27107F637FEE331DA134EA1FB42`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-x64.zip)** — SHA-256 `61DF7D7632204E7771E83714A0BABADAC36AF7083668C421B0BDDE7343D40796`
 
 On Windows, run the installer or extract the portable ZIP. On macOS, extract the ZIP, drag the app into **Applications**, then open it. After launch, open **Settings**, enter your own provider details, and run **Runtime Diagnostics**.
 
@@ -32,6 +32,7 @@ The application can:
 
 - turn a natural-language question into a validated structured specification;
 - run a bounded, persistent autonomous research workflow with specialized roles;
+- search finite constructions using seeded populations, mutation/recombination, Pareto and novelty archives, and bounded real worker-thread evaluation;
 - maintain research branches, evidence, failed routes, proof steps, and a proof graph;
 - execute restricted Python, SymPy, NumPy, SciPy, bounded Z3 checks, and real Lean 4 kernel checks;
 - extract and index text from PDF, DOCX, text, Markdown, and LaTeX sources for bounded research context and source-aware chat;
@@ -82,6 +83,7 @@ Frozen bindings are main-process records. The renderer cannot save or delete the
 - OpenAI-compatible `/chat/completions` transport with bounded retries, SSE normalization, tool-call handling, reasoning-content compatibility, and structured-JSON recovery.
 - Local Markdown/LaTeX report export and JSON counterexample evidence export.
 - Restart recovery that converts interrupted runs to a resumable paused checkpoint.
+- **Construction Discovery Engine:** schema-checked finite construction input; deterministic candidate population; mutation, recombination, nondominated Pareto fronts, novelty scoring, and a bounded archive; a 1–32 worker-thread evaluator pool; per-generation SQLite checkpoints; pause/resume/restart recovery. A run is bounded to one million candidate evaluations.
 
 The [changelog](CHANGELOG.md) records the implemented release history. Roadmap ideas are not presented as shipped features.
 
@@ -93,6 +95,7 @@ React + TypeScript renderer
 Electron main process
         ├── SQLite project and checkpoint store
         ├── research orchestrator and provider adapter
+        ├── finite-construction discovery engine → bounded Node worker-thread evaluator pool
         ├── safeStorage credential wrapper
         ├── isolated Python worker → SymPy / NumPy / SciPy / Z3
         └── audited Lean 4 / Lake adapter → kernel acceptance
@@ -219,6 +222,8 @@ Provider E2E uses a local mock HTTP server. Tests against a real paid provider a
 - Imported documents use local text extraction and deterministic chunk retrieval, not OCR, embeddings, or a citation-grade semantic search engine.
 - The restricted Python worker is not an OS-level sandbox.
 - Provider compatibility varies, and model output can remain malformed or mathematically wrong after bounded recovery.
+- The Discovery Engine is a finite, fixed-objective search substrate. It does not yet ask an LLM to invent construction encodings, execute arbitrary evaluators, coordinate a distributed cluster, or maintain a cross-project theorem/lemma database.
+- Lean is currently an audited kernel verifier, not an interactive proof-state/tactic beam-search engine. A successful Lean theorem remains distinct from semantic equivalence to the original natural-language question unless the mapping is user-confirmed.
 - The Windows installer has no configured public code-signing identity; the macOS applications are not Developer-ID signed or notarized.
 - The macOS packages are statically and structurally validated, not dynamically tested on physical Apple Silicon and Intel Macs for this release.
 

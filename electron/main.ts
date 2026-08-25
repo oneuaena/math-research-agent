@@ -16,6 +16,7 @@ import { buildLatexReport, buildMarkdownReport } from './report';
 import { ResearchStateLog } from './research-state-log';
 import { ResearchJobManager } from './research-job-manager';
 import { ToolRunner } from './tool-runner';
+import { DiscoveryEngine } from './discovery-engine';
 
 let mainWindow: BrowserWindow | null = null;
 let database: ResearchDatabase;
@@ -26,6 +27,8 @@ let jobs: ResearchJobManager;
 let literature: LiteratureSearchService;
 let formalBindings: FormalBindingService;
 let chat: ChatService;
+let discovery: DiscoveryEngine;
+const discoveryControllers = new Map<string, AbortController>();
 let loginStartupEnabled: boolean | null = null;
 
 const daemonMode = process.argv.includes('--research-daemon');
@@ -136,15 +139,33 @@ function registerIpc(): void {
   ipcMain.handle('projects:update', (_event, id: string, patch: Partial<CreateProjectInput>) => database.updateProject(id, patch));
   ipcMain.handle('projects:remove', (_event, id: string) => database.removeProject(id));
   ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => {
-    if (collection === 'formalBindings') throw new Error('FORMAL_BINDING_IMMUTABLE: use the dedicated binding gate.');
+    if (collection === 'formalBindings' || collection === 'discoveryRuns') throw new Error('MAIN_PROCESS_RECORD_ONLY: use the dedicated main-process service.');
     return database.saveRecord(collection, record);
   });
   ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => {
-    if (collection === 'formalBindings') throw new Error('FORMAL_BINDING_IMMUTABLE: frozen bindings cannot be deleted from the renderer.');
+    if (collection === 'formalBindings' || collection === 'discoveryRuns') throw new Error('MAIN_PROCESS_RECORD_ONLY: this record cannot be deleted from the renderer.');
     return database.removeRecord(collection, id, projectId);
   });
   ipcMain.handle('formal-bindings:freeze-user-confirmed', (_event, projectId: string, originalStatement: string, formalIr: string, leanSource: string) => formalBindings.freezeUserConfirmed(projectId, originalStatement, formalIr, leanSource));
   ipcMain.handle('formal-bindings:verify', (_event, projectId: string, bindingId: string, leanSource: string) => formalBindings.verify(projectId, bindingId, leanSource));
+  ipcMain.handle('discovery:start', async (_event, projectId: string, input: unknown) => {
+    if (discoveryControllers.has(projectId)) throw new Error('A discovery run is already active for this project.');
+    const controller = new AbortController(); discoveryControllers.set(projectId, controller);
+    try { return await discovery.start(projectId, input, controller.signal); }
+    finally { discoveryControllers.delete(projectId); }
+  });
+  ipcMain.handle('discovery:resume', async (_event, projectId: string, runId: string) => {
+    if (discoveryControllers.has(projectId)) throw new Error('A discovery run is already active for this project.');
+    const controller = new AbortController(); discoveryControllers.set(projectId, controller);
+    try { return await discovery.resume(projectId, runId, controller.signal); }
+    finally { discoveryControllers.delete(projectId); }
+  });
+  ipcMain.handle('discovery:stop', (_event, projectId: string) => {
+    const controller = discoveryControllers.get(projectId);
+    if (!controller) return null;
+    controller.abort();
+    return database.getProject(projectId, false).discoveryRuns.find((run) => run.status === 'RUNNING') ?? null;
+  });
 
   ipcMain.handle('agent:start', (_event, projectId: string) => jobs.start(projectId));
   ipcMain.handle('agent:resume', (_event, projectId: string) => jobs.resume(projectId));
@@ -243,6 +264,8 @@ app.whenReady().then(async () => {
   credentials = new CredentialStore(database);
   tools = new ToolRunner(app.getPath('userData'), () => database.getSettings());
   formalBindings = new FormalBindingService(database);
+  discovery = new DiscoveryEngine(database);
+  discovery.recoverInterruptedRuns();
   literature = new LiteratureSearchService(database, undefined, join(app.getPath('userData'), 'literature-full-text'));
   const researchStateLog = new ResearchStateLog(join(app.getPath('userData'), 'logs', 'research-state.jsonl'));
   agent = new AgentCoordinator(

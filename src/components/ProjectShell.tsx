@@ -14,12 +14,14 @@ import { BranchesView, ProofsView, ResearchConsole } from './ResearchViews';
 import { stageZh, t, type CopyKey } from '../i18n';
 import { ChatWorkspace } from './ChatWorkspace';
 import { FormalLab } from './FormalLab';
+import { DiscoveryLab } from './DiscoveryLab';
 
 const stressNav: Array<{ view: WorkspaceView; label: CopyKey; icon: typeof CircleDot }> = [
   { view: 'result', label: 'stressTest', icon: ShieldCheck },
   { view: 'attacks', label: 'attackHistory', icon: History },
   { view: 'tree', label: 'attackTree', icon: GitBranch },
   { view: 'experiments', label: 'experiments', icon: FlaskConical },
+  { view: 'discovery', label: 'discovery', icon: CircleDot },
   { view: 'formal', label: 'formalLab', icon: ShieldCheck },
   { view: 'memory', label: 'researchMemory', icon: MemoryStick },
   { view: 'notebook', label: 'notebook', icon: BookMarked },
@@ -35,6 +37,7 @@ const researchNav: Array<{ view: WorkspaceView; label: CopyKey; icon: typeof Cir
   { view: 'proofs', label: 'proofs', icon: ScrollText },
   { view: 'formal', label: 'formalLab', icon: ShieldCheck },
   { view: 'experiments', label: 'experiments', icon: FlaskConical },
+  { view: 'discovery', label: 'discovery', icon: CircleDot },
   { view: 'memory', label: 'researchMemory', icon: MemoryStick },
   { view: 'notebook', label: 'notebook', icon: BookMarked },
   { view: 'papers', label: 'papers', icon: Files },
@@ -52,6 +55,7 @@ export function ProjectShell({ openSettings }: { openSettings(): void }) {
     chat: <ChatWorkspace />,
     research: <ResearchConsole />, branches: <BranchesView />, proofs: <ProofsView />,
     formal: <FormalLab />,
+    discovery: <DiscoveryLab />,
     result: <StressResultView />, attacks: <AttackHistoryView />,
     notebook: <Notebook />, tree: <ResearchTree />, conjectures: <PropositionsView kind="Conjecture" />,
     lemmas: <PropositionsView kind="Lemma" />, experiments: <ExperimentsView />, papers: <PapersView />,

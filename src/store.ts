@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { AgentEvent, ChatEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot, ResearchJob } from './shared/types';
 
-export type WorkspaceView = 'chat' | 'research' | 'branches' | 'proofs' | 'formal' | 'result' | 'attacks' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
+export type WorkspaceView = 'chat' | 'research' | 'branches' | 'proofs' | 'formal' | 'result' | 'attacks' | 'discovery' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
 
 interface AppState {
   projects: Project[];

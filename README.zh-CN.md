@@ -12,13 +12,13 @@ Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组�
 
 ### Windows 10/11 x64
 
-- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-Setup-1.2.2.exe)** — SHA-256 `073AF6569F27441150B15C2A191CFF5CBD333DF6D4289359B029287088E4173D`
-- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-Windows-Software.zip)** — SHA-256 `B7B9329683450A1C3F4BCA0709F58542DB094B1897C4E08ECCC1258C6604CCE1`
+- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-Setup-1.3.0.exe)** — SHA-256 `A30B584C05B436FECCF256015AF0B52CB6F4364B78CE25BCEC253C6072094410`
+- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-Windows-Software.zip)** — SHA-256 `19F3A5FC63EDB46757F2F040CE95A0480C731A9A0AD78D695B942969298C5F1C`
 
 ### macOS 13 或更高版本
 
-- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-arm64.zip)** — SHA-256 `2A68734E6CACE11D04AD61FF0627FEC53EC7128909E9384B0A9C9F031BE8ACD0`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-x64.zip)** — SHA-256 `3912D8D9076867E28326E42D712CDC324C199E56693BB3FB1051134E5DD18888`
+- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-arm64.zip)** — SHA-256 `02AD3A7DA3B4EDC4A1DB79B1B8CA1B408021F27107F637FEE331DA134EA1FB42`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-x64.zip)** — SHA-256 `61DF7D7632204E7771E83714A0BABADAC36AF7083668C421B0BDDE7343D40796`
 
 Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应用拖入“应用程序”目录再打开。启动后进入“设置”，填写自己的 Provider、Base URL、模型和 API Key，并运行“运行环境检查”。
 
@@ -32,6 +32,7 @@ Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应�
 
 - 把自然语言问题转换为经过 schema 校验的结构化规格；
 - 使用不同研究角色运行有界、持久化的自主研究流程；
+- 对有限构造进行带 seed 的种群、变异/重组、Pareto/新颖性归档和受限真实 worker 线程评估；
 - 维护研究分支、证据、失败路线、证明步骤和证明图；
 - 执行受限 Python、SymPy、NumPy、SciPy、有界 Z3 检查和真实 Lean 4 内核检查；
 - 对 PDF、DOCX、文本、Markdown、LaTeX 文档提取并索引文本，供有界研究上下文和来源感知对话使用；
@@ -82,6 +83,7 @@ Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应�
 - OpenAI-compatible `/chat/completions` 传输层，支持有限重试、SSE 归一化、工具调用、reasoning 字段兼容和结构化 JSON 恢复。
 - 本地导出 Markdown/LaTeX 报告和 JSON 反例证据。
 - 启动时把中断任务恢复为可继续的暂停 checkpoint。
+- **构造发现引擎：** schema 校验的有限构造输入、确定性候选种群、变异、重组、非支配 Pareto 前沿、新颖性评分和受限归档；1–32 个 worker 线程评估；逐代 SQLite checkpoint；支持暂停、恢复和重启恢复。单次运行最多评估一百万个候选。
 
 [CHANGELOG](CHANGELOG.md) 只记录真实实现；roadmap 想法不会写成已交付功能。
 
@@ -93,6 +95,7 @@ React + TypeScript 渲染进程
 Electron 主进程
         ├── SQLite 项目与 checkpoint 存储
         ├── 研究编排器与 Provider 适配层
+        ├── 有限构造发现引擎 → 有界 Node worker 线程评估池
         ├── safeStorage 凭据封装
         ├── 隔离 Python worker → SymPy / NumPy / SciPy / Z3
         └── 可审计 Lean 4 / Lake 适配器 → 内核接受
@@ -219,6 +222,8 @@ Provider E2E 使用本地 mock HTTP server。真实付费 Provider 测试不会�
 - 导入文档采用本地文本提取和确定性分块检索，不含 OCR、向量嵌入，也不是引用审计级语义搜索系统。
 - 受限 Python worker 不是 OS 级沙箱。
 - Provider 能力不同；经过有限恢复后，模型输出仍可能格式错误或数学上错误。
+- Discovery Engine 是有限、固定目标的搜索底座：它尚不会让 LLM 自主发明构造编码，不会执行任意 evaluator，不是分布式研究集群，也尚未提供跨项目 theorem/lemma 数据库。
+- Lean 当前是可审计的内核验证器，不是维护 proof state/策略 beam search 的交互证明搜索器；除非映射经用户确认，Lean theorem 成功仍不同于原自然语言问题的语义等价。
 - Windows installer 尚未配置公开代码签名身份；Mac 应用未使用 Developer ID 签名或 Apple 公证。
 - 本次 Mac 包完成了静态与结构验证，但没有在实体 Apple Silicon/Intel Mac 上做动态运行测试。
 

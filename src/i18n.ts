@@ -3,6 +3,7 @@ export type Language = 'zh' | 'en';
 const copy = {
   workspace: ['工作台', 'WORKSPACE'],
   stressTest: ['猜想压力测试', 'Conjecture stress test'],
+  discovery: ['构造发现', 'Construction discovery'],
   autonomousResearch: ['自主数学研究', 'Autonomous research'],
   chat: ['研究对话', 'Research chat'],
   researchSession: ['研究会话', 'Research session'],

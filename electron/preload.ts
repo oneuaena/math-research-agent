@@ -30,6 +30,11 @@ const api: DesktopApi = {
     freezeUserConfirmed: (projectId, originalStatement, formalIr, leanSource) => ipcRenderer.invoke('formal-bindings:freeze-user-confirmed', projectId, originalStatement, formalIr, leanSource),
     verify: (projectId, bindingId, leanSource) => ipcRenderer.invoke('formal-bindings:verify', projectId, bindingId, leanSource),
   },
+  discovery: {
+    start: (projectId, input) => ipcRenderer.invoke('discovery:start', projectId, input),
+    resume: (projectId, runId) => ipcRenderer.invoke('discovery:resume', projectId, runId),
+    stop: (projectId) => ipcRenderer.invoke('discovery:stop', projectId),
+  },
   documents: {
     import: (projectId: string) => ipcRenderer.invoke('documents:import', projectId),
     importPaths: (projectId: string, paths: string[]) => ipcRenderer.invoke('documents:import-paths', projectId, paths),

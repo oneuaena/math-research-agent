@@ -137,3 +137,25 @@ test('project chat persists and an imported document is indexed visibly', async 
     return (await window.research.projects.get(project.id)).messages.length;
   })).toBe(2);
 });
+
+test('finite construction discovery runs through the visible worker-backed UI and persists its archive', async () => {
+  await page.getByRole('button', { name: 'New project' }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Project name').fill('Finite construction');
+  await dialog.getByLabel('Statement').fill('Find a finite construction subject to pair constraints.');
+  await dialog.getByRole('button', { name: 'Create project' }).click();
+  await page.getByRole('button', { name: 'Construction discovery' }).click();
+  await expect(page.getByRole('heading', { name: 'Construction discovery' })).toBeVisible();
+  await page.getByRole('button', { name: 'Start search' }).click();
+  await expect(page.getByText('Search completed.')).toBeVisible({ timeout: 30_000 });
+  await expect(page.getByText('COMPLETED', { exact: true })).toBeVisible();
+  await expect(page.getByText('Current leading Pareto entry')).toBeVisible();
+  const persisted = await page.evaluate(async () => {
+    const project = (await window.research.projects.list()).find((item) => item.name === 'Finite construction')!;
+    return (await window.research.projects.get(project.id)).discoveryRuns.at(-1);
+  });
+  expect(persisted?.status).toBe('COMPLETED');
+  expect(persisted?.totalEvaluated).toBe(5_120);
+  expect(persisted?.archive.length).toBeGreaterThan(0);
+  await page.screenshot({ path: test.info().outputPath('construction-discovery.png'), fullPage: true });
+});

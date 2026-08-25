@@ -475,6 +475,35 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); outline
 .attack-exhausted { color: var(--accent-strong); }
 .attack-candidate-found { color: var(--warning); }
 
+/* Finite construction discovery */
+.discovery-view { min-height: 100%; }
+.discovery-content { width: min(900px, calc(100% - 48px)); margin: 24px auto 80px; display: grid; gap: 12px; }
+.discovery-card { padding: 21px 23px; border: 1px solid var(--border); border-radius: 11px; background: var(--panel); }
+.discovery-intro { display: grid; grid-template-columns: 28px 1fr; gap: 12px; border-left: 2px solid var(--accent); }
+.discovery-intro svg { color: var(--accent-strong); }
+.discovery-card h2 { margin: 0; font: 500 18px Georgia, serif; }
+.discovery-card p { margin: 7px 0 0; color: var(--text-soft); font-size: 11px; line-height: 1.55; }
+.discovery-section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; }
+.discovery-editor { min-height: 310px; margin-top: 16px; font: 11px/1.55 "Cascadia Code", Consolas, monospace; }
+.discovery-actions { display: flex; gap: 8px; margin-top: 13px; }
+.discovery-notice { padding: 9px 11px; border: 1px solid var(--border); border-radius: 7px; background: var(--panel-soft); }
+.discovery-metrics { display: grid; grid-template-columns: repeat(4, 1fr); margin-top: 16px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.discovery-metrics div { padding: 12px; display: grid; gap: 5px; border-right: 1px solid var(--border); background: var(--panel-soft); }
+.discovery-metrics div:last-child { border-right: 0; }
+.discovery-metrics span { color: var(--text-faint); font-size: 9px; }
+.discovery-metrics strong { font: 500 17px Georgia, serif; }
+.discovery-status { padding: 4px 7px; border: 1px solid var(--border); border-radius: 999px; color: var(--text-faint); font-size: 9px; letter-spacing: .05em; }
+.status-completed { color: var(--verified); border-color: color-mix(in srgb, var(--verified) 45%, var(--border)); }
+.status-paused { color: var(--warning); }
+.status-failed { color: var(--danger); }
+.discovery-best { display: grid; gap: 7px; margin-top: 16px; padding: 13px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
+.discovery-best h3 { margin: 0; font-size: 11px; }
+.discovery-best code { color: var(--accent-strong); overflow-wrap: anywhere; }
+.discovery-best span { color: var(--text-faint); font-size: 10px; }
+.discovery-warning { display: flex; align-items: center; gap: 7px; color: var(--warning) !important; }
+
+@media (max-width: 700px) { .discovery-metrics { grid-template-columns: repeat(2, 1fr); } .discovery-metrics div:nth-child(2) { border-right: 0; } .discovery-metrics div:nth-child(-n+2) { border-bottom: 1px solid var(--border); } }
+
 @media (max-width: 1240px) {
   .workspace-shell { grid-template-columns: 198px minmax(0, 1fr) 285px; }
   .workspace-topbar { grid-template-columns: 198px minmax(160px, 1fr) minmax(0, .6fr) auto; }
