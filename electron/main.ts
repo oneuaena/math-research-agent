@@ -10,6 +10,7 @@ import { ResearchDatabase } from './database';
 import { extractDocument, INDEXABLE_DOCUMENT_EXTENSIONS } from './document-extractor';
 import { buildDocumentChunks } from './document-indexer';
 import { LiteratureSearchService } from './literature-search';
+import { FormalBindingService } from './formal-binding';
 import { ResponsesProvider } from './provider';
 import { buildLatexReport, buildMarkdownReport } from './report';
 import { ResearchStateLog } from './research-state-log';
@@ -23,6 +24,7 @@ let tools: ToolRunner;
 let agent: AgentCoordinator;
 let jobs: ResearchJobManager;
 let literature: LiteratureSearchService;
+let formalBindings: FormalBindingService;
 let chat: ChatService;
 let loginStartupEnabled: boolean | null = null;
 
@@ -135,6 +137,8 @@ function registerIpc(): void {
   ipcMain.handle('projects:remove', (_event, id: string) => database.removeProject(id));
   ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => database.saveRecord(collection, record));
   ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => database.removeRecord(collection, id, projectId));
+  ipcMain.handle('formal-bindings:create', (_event, projectId: string, originalStatement: string, formalIr: string, leanSource: string) => formalBindings.create(projectId, originalStatement, formalIr, leanSource));
+  ipcMain.handle('formal-bindings:verify', (_event, projectId: string, bindingId: string, leanSource: string) => formalBindings.verify(projectId, bindingId, leanSource));
 
   ipcMain.handle('agent:start', (_event, projectId: string) => jobs.start(projectId));
   ipcMain.handle('agent:resume', (_event, projectId: string) => jobs.resume(projectId));
@@ -143,7 +147,14 @@ function registerIpc(): void {
   ipcMain.handle('agent:jobs', (_event, projectId?: string) => jobs.list(projectId));
   ipcMain.handle('tools:run', async (_event, invocation: ToolInvocation) => {
     const started = new Date().toISOString();
-    const result = await tools.run(invocation);
+    const bindingId = invocation.name === 'lean_check' && typeof invocation.input.bindingId === 'string' ? invocation.input.bindingId : '';
+    const bindingCheck = invocation.name === 'lean_check'
+      ? bindingId ? formalBindings.verify(invocation.projectId, bindingId, String(invocation.input.code ?? '')) : { ok: false, error: 'FORMAL_BINDING_REQUIRED: create a project Formal IR binding before running Lean.' }
+      : { ok: true };
+    const result = !bindingCheck.ok
+      ? { ok: false, success: false, output: '', stdout: '', stderr: '', error: bindingCheck.error, errorType: 'VALIDATION_ERROR' as const, exitCode: null, durationMs: 0, timeout: false, verificationStatus: 'PROGRAM_FAILURE' as const }
+      : await tools.run(invocation);
+    if (result.ok && invocation.name === 'lean_check' && bindingId) formalBindings.certify(invocation.projectId, bindingId, String(invocation.input.code ?? ''), result.output || result.stdout);
     const activity: Activity = {
       id: randomUUID(), projectId: invocation.projectId, stage: 'EXPERIMENT', kind: 'tool',
       title: invocation.name, detail: result.ok ? result.output.slice(0, 1200) : result.error ?? 'Tool failed.',
@@ -225,6 +236,7 @@ app.whenReady().then(async () => {
   await indexExistingImportedDocuments();
   credentials = new CredentialStore(database);
   tools = new ToolRunner(app.getPath('userData'), () => database.getSettings());
+  formalBindings = new FormalBindingService(database);
   literature = new LiteratureSearchService(database, undefined, join(app.getPath('userData'), 'literature-full-text'));
   const researchStateLog = new ResearchStateLog(join(app.getPath('userData'), 'logs', 'research-state.jsonl'));
   agent = new AgentCoordinator(

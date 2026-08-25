@@ -125,6 +125,29 @@ export interface StructuredSpecification {
   updatedAt: string;
 }
 
+/**
+ * An immutable, hash-addressed bridge from the user-facing claim through a
+ * project Formal IR to the exact Lean declaration accepted by the kernel.
+ * It records an auditable binding; it does not claim that natural-language
+ * interpretation has been solved automatically.
+ */
+export interface FormalBinding {
+  id: string;
+  projectId: string;
+  originalStatement: string;
+  formalIr: string;
+  leanStatement: string;
+  originalHash: string;
+  formalIrHash: string;
+  leanStatementHash: string;
+  bindingHash: string;
+  proofSourceHash: string | null;
+  certificateHash: string | null;
+  status: 'BOUND' | 'KERNEL_CERTIFIED' | 'INVALID';
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ResearchBranch {
   id: string;
   projectId: string;
@@ -573,6 +596,7 @@ export interface ProjectSnapshot {
   attacks: AttackRecord[];
   stressResults: StressTestResult[];
   specifications: StructuredSpecification[];
+  formalBindings: FormalBinding[];
   sessions: ResearchSession[];
   researchSteps: ResearchStep[];
   branches: ResearchBranch[];
@@ -640,7 +664,7 @@ export interface CredentialStatus { configured: boolean; masked: string; secureS
 
 export type CollectionName = 'blocks' | 'nodes' | 'propositions' | 'experiments' | 'memories' | 'failedAttempts' | 'sources' | 'attacks' | 'stressResults'
   | 'specifications' | 'sessions' | 'researchSteps' | 'branches' | 'evidence' | 'graphEdges' | 'proofs'
-  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks';
+  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings';
 
 export interface AgentEvent {
   projectId: string;
@@ -679,6 +703,12 @@ export interface ToolResult {
   auditLogPath?: string;
 }
 
+export interface FormalBindingValidation {
+  ok: boolean;
+  binding?: FormalBinding;
+  error?: string;
+}
+
 export interface DesktopApi {
   projects: {
     list(): Promise<Project[]>;
@@ -700,6 +730,10 @@ export interface DesktopApi {
     onEvent(callback: (event: AgentEvent) => void): () => void;
   };
   tools: { run(invocation: ToolInvocation): Promise<ToolResult> };
+  formalBindings: {
+    create(projectId: string, originalStatement: string, formalIr: string, leanSource: string): Promise<FormalBinding>;
+    verify(projectId: string, bindingId: string, leanSource: string): Promise<FormalBindingValidation>;
+  };
   documents: {
     import(projectId: string): Promise<ProjectSnapshot | null>;
     importPaths(projectId: string, paths: string[]): Promise<ProjectSnapshot>;

@@ -1,5 +1,9 @@
 # Changelog
 
+## [1.2.1] - 2026-08-25
+
+- Added a main-process Formal Binding Gate. It locks the original claim, Formal IR, exact Lean declaration, proof source, and successful kernel certificate with SHA-256 links; a swapped Lean declaration is rejected before kernel execution.
+
 All notable project changes are documented here. The format follows Keep a Changelog principles and the project uses semantic versioning for public releases.
 
 ## [1.2.0] - 2026-08-24

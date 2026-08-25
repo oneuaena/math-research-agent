@@ -19,7 +19,7 @@ import { cosineSimilarity, embedText, lexicalSimilarity, retrievalTerms } from '
 const COLLECTIONS: CollectionName[] = [
   'blocks', 'nodes', 'propositions', 'experiments', 'memories', 'failedAttempts', 'sources', 'attacks', 'stressResults',
   'specifications', 'sessions', 'researchSteps', 'branches', 'evidence', 'graphEdges', 'proofs',
-  'conversations', 'messages', 'literature', 'noveltyChecks',
+  'conversations', 'messages', 'literature', 'noveltyChecks', 'formalBindings',
 ];
 
 const DEFAULT_SETTINGS: ProviderSettings = {
@@ -259,6 +259,7 @@ export class ResearchDatabase {
       attacks: this.getRecords(id, 'attacks'),
       stressResults: this.getRecords(id, 'stressResults'),
       specifications: this.getRecords(id, 'specifications'),
+      formalBindings: this.getRecords(id, 'formalBindings'),
       sessions: this.getRecords(id, 'sessions'),
       researchSteps: this.getRecords(id, 'researchSteps'),
       branches: this.getRecords(id, 'branches'),

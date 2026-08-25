@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "runtime" / "cache" / "macos"
 RELEASE = ROOT / "release"
 APP_NAME = "Math Research Agent"
-VERSION = "1.2.0"
+VERSION = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 ELECTRON_VERSION = "43.3.0"
 EXPECTED_ELECTRON = {
     "arm64": "ee939d1564d83d61032b3b3cb23af4e46005a4900c91f0695f7ed793f0ce6e83",

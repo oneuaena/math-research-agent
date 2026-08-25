@@ -9,6 +9,7 @@ import type { ResearchDatabase } from './database';
 import type { ModelProvider } from './provider';
 import type { ToolRunner } from './tool-runner';
 import type { LiteratureSearchService } from './literature-search';
+import { FormalBindingService } from './formal-binding';
 
 export interface ResearchRunOptions {
   resumeRequested?: boolean;
@@ -311,7 +312,22 @@ export class ResearchOrchestrator {
     const running = { ...planned, id: randomUUID(), title: `RUNNING: ${invocation.name}`, status: 'running' as const, createdAt: now() };
     this.db.addActivity(running);
     this.publish({ projectId: invocation.projectId, running: true, stage, activity: running });
-    const result = await this.tools.run(invocation);
+    let boundInvocation = invocation;
+    let bindingId = '';
+    if (invocation.name === 'lean_check') {
+      const snapshot = this.db.getProject(invocation.projectId, false);
+      const proof = typeof invocation.input.proofId === 'string' ? snapshot.proofs.find((item) => item.id === invocation.input.proofId) : undefined;
+      const binding = new FormalBindingService(this.db).create(
+        invocation.projectId,
+        proof?.theorem ?? snapshot.project.question,
+        JSON.stringify(snapshot.specifications.at(-1) ?? { originalClaim: snapshot.project.question }),
+        String(invocation.input.code ?? ''),
+      );
+      bindingId = binding.id;
+      boundInvocation = { ...invocation, input: { ...invocation.input, bindingId } };
+    }
+    const result = await this.tools.run(boundInvocation);
+    if (result.ok && bindingId) new FormalBindingService(this.db).certify(invocation.projectId, bindingId, String(invocation.input.code ?? ''), result.output || result.stdout);
     const detail = result.ok
       ? `VERIFIED: exit ${result.exitCode ?? 0}; stdout ${(result.stdout ?? '').slice(0, 1_000) || '(empty)'}${result.stderr ? `; stderr ${result.stderr.slice(0, 1_000)}` : ''}`
       : `FAILED: ${result.error ?? 'tool failure'}; exit ${result.exitCode ?? 'n/a'}; stderr ${(result.stderr ?? '').slice(0, 1_000) || '(empty)'}`;
@@ -392,7 +408,10 @@ export class ResearchOrchestrator {
     const formalizationOf = typeof input.formalizationOf === 'string' ? input.formalizationOf.trim() : '';
     if (!proofId || !formalizationOf) return;
     const proof = this.db.getProject(projectId, false).proofs.find((item) => item.id === proofId);
-    if (!proof || proof.theorem.trim() !== formalizationOf || !proof.independentlyReviewed) return;
+    const binding = this.db.getProject(projectId, false).formalBindings
+      .filter((item) => item.status === 'KERNEL_CERTIFIED' && item.originalStatement === proof?.theorem.trim())
+      .at(-1);
+    if (!proof || proof.theorem.trim() !== formalizationOf || !proof.independentlyReviewed || binding?.status !== 'KERNEL_CERTIFIED') return;
     if (proof.steps.length === 0 || proof.steps.some((step) => step.critical && step.status !== 'VALID')) return;
     this.db.saveRecord('proofs', {
       ...proof,

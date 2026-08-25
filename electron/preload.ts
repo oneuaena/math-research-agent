@@ -26,6 +26,10 @@ const api: DesktopApi = {
     },
   },
   tools: { run: (invocation: ToolInvocation) => ipcRenderer.invoke('tools:run', invocation) },
+  formalBindings: {
+    create: (projectId, originalStatement, formalIr, leanSource) => ipcRenderer.invoke('formal-bindings:create', projectId, originalStatement, formalIr, leanSource),
+    verify: (projectId, bindingId, leanSource) => ipcRenderer.invoke('formal-bindings:verify', projectId, bindingId, leanSource),
+  },
   documents: {
     import: (projectId: string) => ipcRenderer.invoke('documents:import', projectId),
     importPaths: (projectId: string, paths: string[]) => ipcRenderer.invoke('documents:import-paths', projectId, paths),

@@ -31,11 +31,19 @@ try {
     const factorization = await window.research.tools.run({ projectId: snapshot.project.id, name: 'run_python', purpose: 'Smoke test SymPy', input: { code: "import sympy as sp\nx = sp.Symbol('x')\nresult = sp.factor(x**2 - 1)" } });
     const z3 = await window.research.tools.run({ projectId: snapshot.project.id, name: 'z3_check', purpose: 'Smoke test Z3', input: { smt2: '(declare-const x Int) (assert (> x 1)) (assert (< x 3))' } });
     const z3Unsat = await window.research.tools.run({ projectId: snapshot.project.id, name: 'z3_check', purpose: 'Smoke test Z3 UNSAT', input: { smt2: '(declare-const x Int) (assert (> x 1)) (assert (< x 0))' } });
+    const leanSource = 'example (n : Nat) : n = n := by\n  rfl';
+    const leanBinding = diagnostics.lean.available
+      ? await window.research.formalBindings.create(snapshot.project.id, 'Every natural n equals itself.', 'forall n : Nat, n = n', leanSource)
+      : null;
     const lean = diagnostics.lean.available
-      ? await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: 'Smoke test Lean kernel', input: { code: 'example (n : Nat) : n = n := by\n  rfl' } })
+      ? await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: 'Smoke test Lean kernel', input: { code: leanSource, bindingId: leanBinding.id } })
+      : null;
+    const invalidLeanSource = 'example : False := by\n  trivial';
+    const invalidBinding = diagnostics.lean.available
+      ? await window.research.formalBindings.create(snapshot.project.id, 'False.', 'False', invalidLeanSource)
       : null;
     const leanInvalid = diagnostics.lean.available
-      ? await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: 'Smoke test Lean rejection', input: { code: 'example : False := by\n  trivial' } })
+      ? await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: 'Smoke test Lean rejection', input: { code: invalidLeanSource, bindingId: invalidBinding.id } })
       : null;
     return { diagnostics, arithmetic, printed, unicode, programError, factorization, z3, z3Unsat, lean, leanInvalid };
   });
