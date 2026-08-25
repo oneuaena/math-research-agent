@@ -12,13 +12,13 @@ Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组�
 
 ### Windows 10/11 x64
 
-- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-Setup-1.2.0.exe)** — SHA-256 `4712516FF2FD330BFDA815E6E575CFCD41EE309059B11832236EF98E2362D74B`
-- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-Windows-Software.zip)** — SHA-256 `D59C198D980BF0ECC20A51A078CF6D151EEBD436A6171B2EC2039ED85744F5FF`
+- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-Setup-1.2.2.exe)** — SHA-256 `073AF6569F27441150B15C2A191CFF5CBD333DF6D4289359B029287088E4173D`
+- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-Windows-Software.zip)** — SHA-256 `B7B9329683450A1C3F4BCA0709F58542DB094B1897C4E08ECCC1258C6604CCE1`
 
 ### macOS 13 或更高版本
 
-- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-arm64.zip)** — SHA-256 `E47B4939843B2F8297A70804D903536E5B731AAB96A356AAE71E7BE406640EC4`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-x64.zip)** — SHA-256 `97EA797D41E47750938D5FEF87D58B15BE8FF131F26F70870BFF553C50AE4BE1`
+- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-arm64.zip)** — SHA-256 `2A68734E6CACE11D04AD61FF0627FEC53EC7128909E9384B0A9C9F031BE8ACD0`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-x64.zip)** — SHA-256 `3912D8D9076867E28326E42D712CDC324C199E56693BB3FB1051134E5DD18888`
 
 Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应用拖入“应用程序”目录再打开。启动后进入“设置”，填写自己的 Provider、Base URL、模型和 API Key，并运行“运行环境检查”。
 
@@ -52,10 +52,21 @@ Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应�
 | `COMPUTATIONALLY VERIFIED` | 有记录的机器计算检查了一个有界命题或工件。 |
 | `SYMBOLICALLY VERIFIED` | 符号系统检查了指定变换或恒等式。 |
 | `EXACTLY VERIFIED` | 精确算术或可复跑的精确见证检查了所述命题。 |
-| `FORMALLY VERIFIED` | Lean 内核接受了所提交定理，并且应用把它关联到目标完全匹配且经过独立审查的证明。 |
+| `FORMALLY VERIFIED` | 若要提升为原始自然语言命题的形式化验证，必须同时有用户确认的冻结映射、精确证明关联、独立审查、所有关键步骤有效和 Lean 内核接受。AI 提议的映射即使被 Lean 接受，也只标为 `LEAN STATEMENT ONLY`。 |
 | `LLM ASSESSED ONLY` | 只有模型判断，没有独立机器或形式化证据。 |
 
 只要关键步骤无效、未解决、需要缺失引理，或缺少必要计算/形式化，候选证明就仍是不确定的。详见[数学验证规范](docs/VERIFICATION.md)。
+
+## 形式化映射门
+
+形式证明有两个不同的问题：Lean 是否接受某个声明，以及这个声明是否忠实表示用户的原始自然语言命题。应用不会把两者混为一谈。
+
+1. 在 `FORMALIZE` 阶段，Provider 可以随结构化 Formal IR 给出一个**不含证明体**的 Lean 声明头。主进程会在证明执行前冻结归一化后的原始命题、Formal IR、声明及其 SHA-256 标识。
+2. 每次 `lean_check` 都必须引用已有的冻结 `bindingId`，且源代码中的声明头必须精确哈希匹配。缺少 ID、替换声明或旧版/不完整绑定都会在调用 Lean 前被拒绝；Provider 的原生工具调用也经过同一检查。
+3. AI 提议的映射会明确记录为 `LEAN STATEMENT ONLY — original-language equivalence not independently certified`，不能把原始命题提升为已验证证明。
+4. 在 Formal Lab 中，用户可明确确认并冻结映射。只有这一范围才有资格进入现有的独立审查证明提升门；Lean 内核本身仍只证明 Lean 声明，而不会自动证明自然语言翻译正确。
+
+冻结绑定是主进程记录；渲染进程不能通过通用记录接口保存或删除它们。这能防止 UI/模型意外替换溯源链，但不能自动解决一般性的语义等价问题。
 
 ## 已实现功能
 
@@ -67,6 +78,7 @@ Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应�
 - 项目研究对话支持明确的研究控制路由，并从已导入文档检索有界上下文。
 - 本地文档提取与分块索引，以及可选的 arXiv/Crossref 文献检索。
 - Python、SymPy、Z3、Lean 工具运行保留精确输入、分离的输出/错误、超时和严格证据等级审计。
+- 冻结 Formal Binding Gate：FORMALIZE 阶段声明绑定、哈希匹配的 Lean 调用、映射范围标签，以及 Formal Lab 的两步确认流程。
 - OpenAI-compatible `/chat/completions` 传输层，支持有限重试、SSE 归一化、工具调用、reasoning 字段兼容和结构化 JSON 恢复。
 - 本地导出 Markdown/LaTeX 报告和 JSON 反例证据。
 - 启动时把中断任务恢复为可继续的暂停 checkpoint。

@@ -33,14 +33,14 @@ try {
     const z3Unsat = await window.research.tools.run({ projectId: snapshot.project.id, name: 'z3_check', purpose: 'Smoke test Z3 UNSAT', input: { smt2: '(declare-const x Int) (assert (> x 1)) (assert (< x 0))' } });
     const leanSource = 'example (n : Nat) : n = n := by\n  rfl';
     const leanBinding = diagnostics.lean.available
-      ? await window.research.formalBindings.create(snapshot.project.id, 'Every natural n equals itself.', 'forall n : Nat, n = n', leanSource)
+      ? await window.research.formalBindings.freezeUserConfirmed(snapshot.project.id, 'Every natural n equals itself.', 'forall n : Nat, n = n', leanSource)
       : null;
     const lean = diagnostics.lean.available
       ? await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: 'Smoke test Lean kernel', input: { code: leanSource, bindingId: leanBinding.id } })
       : null;
     const invalidLeanSource = 'example : False := by\n  trivial';
     const invalidBinding = diagnostics.lean.available
-      ? await window.research.formalBindings.create(snapshot.project.id, 'False.', 'False', invalidLeanSource)
+      ? await window.research.formalBindings.freezeUserConfirmed(snapshot.project.id, 'False.', 'False', invalidLeanSource)
       : null;
     const leanInvalid = diagnostics.lean.available
       ? await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: 'Smoke test Lean rejection', input: { code: invalidLeanSource, bindingId: invalidBinding.id } })

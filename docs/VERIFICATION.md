@@ -42,7 +42,16 @@ A trusted proof assistant kernel has accepted a formal source file. The record m
 
 The Lean 4 adapter invokes the real `lake env lean` toolchain and persists its source and kernel output. It rejects `sorry`, `admit`, newly declared axioms/constants, native or unsafe shortcuts, metaprogramming, IO, and foreign execution. Kernel acceptance alone checks only the submitted formal statement. The application emits persisted `formally-verified` status only when the tool result is successful, `proofId` refers to the candidate proof, `formalizationOf` exactly equals that proof's theorem, the proof is independently reviewed, and every critical step is valid.
 
-Capability detection, generated Lean text, a kernel-accepted theorem unrelated to the target, or an LLM saying “Lean accepts this” must not be labeled `FORMALLY VERIFIED`. SageMath availability does not currently provide a formal evidence promotion path.
+#### Formal mapping gate
+
+Before any Lean run, `FORMALIZE` may produce a **proof-free** Lean declaration header. The main process freezes one binding containing the normalized original statement, Formal IR, declaration, their SHA-256 hashes, a combined binding hash, and the mapping authority. A later `lean_check` must supply that existing binding ID and its source must reproduce the exact frozen declaration header. Missing IDs, declaration substitutions, incomplete legacy bindings, and renderer attempts to write or delete bindings are rejected before Lean starts.
+
+There are two distinct scopes:
+
+- `LEAN_STATEMENT_ONLY`: an AI proposed the mapping. Kernel acceptance proves the frozen Lean statement only. The application records that the original-language equivalence was not independently certified, and it cannot promote the original claim/proof to `VERIFIED`.
+- `ORIGINAL_CLAIM_MAPPING_USER_CONFIRMED`: a user explicitly froze the natural-language target, Formal IR, and Lean declaration. Kernel acceptance still proves only the Lean statement, but this user-confirmed mapping may participate in full original-claim promotion after the exact proof-target link, independent review, and valid critical-step gates all succeed.
+
+Capability detection, generated Lean text, a kernel-accepted theorem unrelated to the target, or an LLM saying “Lean accepts this” must not be labeled as verification of the original claim. SageMath availability does not currently provide a formal evidence promotion path.
 
 ## Promotion rules
 

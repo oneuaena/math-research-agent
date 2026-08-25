@@ -24,6 +24,7 @@ export const formalizationSchema = z.object({
     exactArithmetic: z.boolean(),
   }).nullable(),
   symbolicExpressions: z.array(z.string().max(10_000)).max(30),
+  leanStatement: z.string().max(20_000).nullable(),
   naturalLanguageOnly: z.boolean(), uncertainty: z.array(z.string().max(2000)).max(50),
   confidence: z.number().min(0).max(1),
 });

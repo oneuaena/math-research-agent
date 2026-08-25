@@ -196,7 +196,18 @@ export class ResearchOrchestrator {
   }
 
   private async persistActionArtifacts(projectId: string, session: ResearchSession, stage: AgentStage, branch: ResearchBranch | null, action: RoleAction, specification: StructuredSpecification | null, signal: AbortSignal): Promise<{ evidenceIds: string[]; toolCallIds: string[] }> {
-    if (specification) this.db.saveRecord('specifications', specification);
+    if (specification) {
+      this.db.saveRecord('specifications', specification);
+      if (specification.leanStatement) {
+        try {
+          new FormalBindingService(this.db).freezeAiProposed(projectId, specification.originalText, JSON.stringify(specification), specification.leanStatement);
+        } catch (error) {
+          action.failures.push(`FORMAL_BINDING_NOT_FROZEN: ${error instanceof Error ? error.message : 'invalid Lean declaration proposed during FORMALIZE.'}`);
+        }
+      } else {
+        action.failures.push('FORMAL_BINDING_NOT_FROZEN: FORMALIZE did not provide a Lean declaration; Lean checks are disabled for this specification.');
+      }
+    }
     const evidenceIds: string[] = [];
     const toolCallIds: string[] = [];
     for (const proposal of action.evidence) {
@@ -312,21 +323,18 @@ export class ResearchOrchestrator {
     const running = { ...planned, id: randomUUID(), title: `RUNNING: ${invocation.name}`, status: 'running' as const, createdAt: now() };
     this.db.addActivity(running);
     this.publish({ projectId: invocation.projectId, running: true, stage, activity: running });
-    let boundInvocation = invocation;
-    let bindingId = '';
+    const bindingId = invocation.name === 'lean_check' && typeof invocation.input.bindingId === 'string' ? invocation.input.bindingId : '';
+    let result: ToolResult;
     if (invocation.name === 'lean_check') {
-      const snapshot = this.db.getProject(invocation.projectId, false);
-      const proof = typeof invocation.input.proofId === 'string' ? snapshot.proofs.find((item) => item.id === invocation.input.proofId) : undefined;
-      const binding = new FormalBindingService(this.db).create(
-        invocation.projectId,
-        proof?.theorem ?? snapshot.project.question,
-        JSON.stringify(snapshot.specifications.at(-1) ?? { originalClaim: snapshot.project.question }),
-        String(invocation.input.code ?? ''),
-      );
-      bindingId = binding.id;
-      boundInvocation = { ...invocation, input: { ...invocation.input, bindingId } };
+      const bindingCheck = bindingId
+        ? new FormalBindingService(this.db).verify(invocation.projectId, bindingId, String(invocation.input.code ?? ''))
+        : { ok: false, error: 'FORMAL_BINDING_REQUIRED: FORMAL_VERIFY must reference a frozen FORMALIZE binding.' };
+      result = bindingCheck.ok
+        ? await this.tools.run(invocation)
+        : { ok: false, success: false, output: '', stdout: '', stderr: '', error: bindingCheck.error, errorType: 'VALIDATION_ERROR', exitCode: null, durationMs: 0, timeout: false, verificationStatus: 'PROGRAM_FAILURE' };
+    } else {
+      result = await this.tools.run(invocation);
     }
-    const result = await this.tools.run(boundInvocation);
     if (result.ok && bindingId) new FormalBindingService(this.db).certify(invocation.projectId, bindingId, String(invocation.input.code ?? ''), result.output || result.stdout);
     const detail = result.ok
       ? `VERIFIED: exit ${result.exitCode ?? 0}; stdout ${(result.stdout ?? '').slice(0, 1_000) || '(empty)'}${result.stderr ? `; stderr ${result.stderr.slice(0, 1_000)}` : ''}`
@@ -346,6 +354,14 @@ export class ResearchOrchestrator {
   ): { callId: string; evidenceId: string } {
     const callId = randomUUID();
     const createdAt = now();
+    const formalBinding = call.name === 'lean_check' && typeof call.input.bindingId === 'string'
+      ? this.db.getProject(projectId, false).formalBindings.find((binding) => binding.id === call.input.bindingId)
+      : undefined;
+    const formalScope = formalBinding?.equivalenceStatus === 'USER_CONFIRMED'
+      ? 'ORIGINAL_CLAIM_MAPPING_USER_CONFIRMED: the user confirmed the original-language to Lean mapping before the kernel run.'
+      : formalBinding
+        ? 'LEAN_STATEMENT_ONLY: the kernel accepted the frozen Lean declaration; original-language equivalence was not independently certified.'
+        : '';
     const verificationStatus: VerificationStatus = !result.ok ? 'unverified'
       : call.name === 'lean_check' && result.verificationStatus === 'FORMALLY_VERIFIED' ? 'formally-verified'
       : call.name === 'z3_check' ? 'bounded-check'
@@ -360,7 +376,7 @@ export class ResearchOrchestrator {
       tool: call.name,
       input: JSON.stringify(call.input),
       output: result.ok ? result.output : result.error ?? '',
-      interpretation: result.ok ? 'VERIFIED: a local tool returned the recorded exit code, stdout, stderr, and output. Interpret only within the recorded search range and assumptions.' : 'FAILED: the tool did not produce verified mathematical evidence; no mathematical claim was promoted.',
+      interpretation: result.ok ? ['VERIFIED: a local tool returned the recorded exit code, stdout, stderr, and output. Interpret only within the recorded search range and assumptions.', formalScope].filter(Boolean).join('\n') : 'FAILED: the tool did not produce verified mathematical evidence; no mathematical claim was promoted.',
       relatedNodeId: branch?.rootNodeId ?? null,
       status: result.ok ? 'succeeded' : 'failed',
       durationMs: result.durationMs,
@@ -386,8 +402,8 @@ export class ResearchOrchestrator {
       type: call.name === 'lean_check' || call.name === 'z3_check' || call.name === 'capability_check' ? 'formal-check'
         : call.name === 'symbolic_simplify' || call.name === 'solve_equation' || call.name === 'differentiate' || call.name === 'integrate' || call.name === 'matrix_compute' ? 'symbolic-computation'
         : 'exact-computation',
-      title: call.purpose,
-      content: result.ok ? result.output : result.error ?? 'Tool failed.',
+      title: formalScope.startsWith('LEAN_STATEMENT_ONLY') ? `${call.purpose} (Lean statement only)` : call.purpose,
+      content: result.ok ? [result.output, formalScope].filter(Boolean).join('\n') : result.error ?? 'Tool failed.',
       verificationStatus: exact && /['"]counterexample['"]\s*:\s*\{/.test(result.output) ? 'exactly-verified' : verificationStatus,
       verificationLevel: result.verificationLevel ?? (result.ok && call.name === 'run_python' ? 'BOUNDED_CHECK' : undefined),
       sourceIds: [],
@@ -408,8 +424,10 @@ export class ResearchOrchestrator {
     const formalizationOf = typeof input.formalizationOf === 'string' ? input.formalizationOf.trim() : '';
     if (!proofId || !formalizationOf) return;
     const proof = this.db.getProject(projectId, false).proofs.find((item) => item.id === proofId);
+    const bindingId = typeof input.bindingId === 'string' ? input.bindingId : '';
     const binding = this.db.getProject(projectId, false).formalBindings
-      .filter((item) => item.status === 'KERNEL_CERTIFIED' && item.originalStatement === proof?.theorem.trim())
+      .filter((item) => item.id === bindingId && item.status === 'KERNEL_CERTIFIED' && item.originalStatement === proof?.theorem.trim()
+        && item.equivalenceStatus === 'USER_CONFIRMED')
       .at(-1);
     if (!proof || proof.theorem.trim() !== formalizationOf || !proof.independentlyReviewed || binding?.status !== 'KERNEL_CERTIFIED') return;
     if (proof.steps.length === 0 || proof.steps.some((step) => step.critical && step.status !== 'VALID')) return;

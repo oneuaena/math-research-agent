@@ -58,7 +58,7 @@ const nativeToolArgumentSchemas: Record<ToolName, z.ZodType<Record<string, unkno
   matrix_compute: z.object({ purpose: purposeSchema, matrix: z.array(z.array(z.union([z.string(), z.number()])).max(50)).max(50), operation: z.enum(['det', 'rank', 'eigenvals', 'inverse']) }).passthrough(),
   capability_check: z.object({ purpose: purposeSchema }).passthrough(),
   z3_check: z.object({ purpose: purposeSchema, smt2: z.string().min(1).max(200_000), timeoutMs: z.number().int().min(1).max(120_000).optional() }).passthrough(),
-  lean_check: z.object({ purpose: purposeSchema, code: z.string().min(1).max(100_000), proofId: z.string().uuid().optional(), formalizationOf: z.string().max(8_000).optional() }).passthrough(),
+  lean_check: z.object({ purpose: purposeSchema, code: z.string().min(1).max(100_000), bindingId: z.string().uuid(), proofId: z.string().uuid().optional(), formalizationOf: z.string().max(8_000).optional() }).passthrough(),
   mathlib_search: z.object({ purpose: purposeSchema, query: z.string().min(2).max(120) }).passthrough(),
   workspace_write: z.object({ purpose: purposeSchema, path: z.string().min(1).max(240), content: z.string().max(2_000_000) }).passthrough(),
   workspace_read: z.object({ purpose: purposeSchema, path: z.string().min(1).max(240) }).passthrough(),
@@ -75,7 +75,7 @@ const nativeTools = [
   ['matrix_compute', 'Compute determinant, rank, eigenvalues, or inverse of a finite matrix.', { purpose: { type: 'string' }, matrix: { type: 'array', items: { type: 'array', items: { type: ['number', 'string'] } } }, operation: { type: 'string', enum: ['det', 'rank', 'eigenvals', 'inverse'] } }, ['purpose', 'matrix', 'operation']],
   ['capability_check', 'Report which optional local mathematical verification adapters are available.', { purpose: { type: 'string' } }, ['purpose']],
   ['z3_check', 'Run a bounded SMT-LIB2 satisfiability check. SAT, UNSAT, UNKNOWN, and timeout remain distinct, and the result proves only the supplied encoding.', { purpose: { type: 'string' }, smt2: { type: 'string' }, timeoutMs: { type: 'integer', minimum: 1, maximum: 120000 } }, ['purpose', 'smt2']],
-  ['lean_check', 'Compile a Lean 4 theorem with Lake and accept the artifact only when the Lean kernel succeeds without sorry, admit, axiom, constant, native_decide, unsafe, or partial escapes. Do not claim that the Lean statement faithfully formalizes a research theorem unless proofId and formalizationOf match an independently reviewed proof record.', { purpose: { type: 'string' }, code: { type: 'string' }, proofId: { type: 'string' }, formalizationOf: { type: 'string' } }, ['purpose', 'code']],
+  ['lean_check', 'Compile a Lean 4 theorem only against a pre-existing frozen FORMALIZE binding. bindingId is mandatory and code must have exactly the locked declaration header. Kernel acceptance proves that Lean statement only; the original-language claim is certified only for user-confirmed mappings.', { purpose: { type: 'string' }, code: { type: 'string' }, bindingId: { type: 'string' }, proofId: { type: 'string' }, formalizationOf: { type: 'string' } }, ['purpose', 'code', 'bindingId']],
   ['mathlib_search', 'Search the pinned local Mathlib source for declaration or text fragments. This is local retrieval, not a verification result.', { purpose: { type: 'string' }, query: { type: 'string' } }, ['purpose', 'query']],
   ['workspace_write', 'Persist UTF-8 research data in this project workspace. Use for scripts, seeds, checkpoints, .few files, JSON, and CSV. Paths must be relative and remain available after app restart.', { purpose: { type: 'string' }, path: { type: 'string' }, content: { type: 'string' } }, ['purpose', 'path', 'content']],
   ['workspace_read', 'Read a UTF-8 seed, checkpoint, script, .few, JSON, CSV, or other project-workspace file created earlier. Returns actual file content or an error.', { purpose: { type: 'string' }, path: { type: 'string' } }, ['purpose', 'path']],
@@ -209,6 +209,7 @@ export class LocalProvider implements ModelProvider {
       validationRules: ['Do not treat sampled survival as proof.', 'Do not mark a proof verified when a critical step is invalid or uncertain.', 'Record assumptions and evidence for every promoted claim.'],
       executable,
       symbolicExpressions: executable ? [executable.expression] : [],
+      leanStatement: null,
       naturalLanguageOnly: !executable,
       uncertainty: [
         ...(project.domain ? [] : ['The variable domain is not fully specified.']),
@@ -320,11 +321,12 @@ export class ResponsesProvider implements ModelProvider {
       validationRules: ['do not treat finite survival as proof'],
       executable: null,
       symbolicExpressions: ['n*(n+1)'],
+      leanStatement: null,
       naturalLanguageOnly: false,
       uncertainty: ['unresolved ambiguity'],
       confidence: 0.5,
     };
-    const prompt = `Convert the mathematical research question into one JSON object matching this exact shape:\n${JSON.stringify(contract)}\nRules: quantifiers, assumptions, equivalentForms, validationRules, symbolicExpressions, and uncertainty must be arrays of strings; domains must be an object mapping variable names to string domains; every searchParameters value must be one string, number, or boolean, never an array or object; confidence must be a number from 0 to 1. executable must be null unless a safe interpretation exists; if present it must contain kind, variable, expression, predicate, range{min,max,sampleCount}, exactArithmetic. Do not invent executable mathematics when ambiguous. Return JSON only. Question context:\n${JSON.stringify(snapshot.project)}`;
+    const prompt = `Convert the mathematical research question into one JSON object matching this exact shape:\n${JSON.stringify(contract)}\nRules: quantifiers, assumptions, equivalentForms, validationRules, symbolicExpressions, and uncertainty must be arrays of strings; domains must be an object mapping variable names to string domains; every searchParameters value must be one string, number, or boolean, never an array or object; confidence must be a number from 0 to 1. executable must be null unless a safe interpretation exists; if present it must contain kind, variable, expression, predicate, range{min,max,sampleCount}, exactArithmetic. leanStatement must be null unless you can state the exact target as one proof-free Lean declaration header beginning theorem, lemma, or example and containing a colon; it must not contain imports, :=, where, tactics, or a proof body. This candidate is frozen before any Lean proof and is not an independently certified translation of the original language. Do not invent executable mathematics when ambiguous. Return JSON only. Question context:\n${JSON.stringify(snapshot.project)}`;
     const first = await this.requestJson(prompt, signal);
     const parsed = formalizationSchema.safeParse(first);
     if (parsed.success) return parsed.data;
@@ -362,6 +364,7 @@ export class ResponsesProvider implements ModelProvider {
       recentSteps: request.snapshot.researchSteps.slice(-12),
       proofs: request.snapshot.proofs.slice(-2),
       evidence: request.snapshot.evidence.slice(-20),
+      formalBindings: request.snapshot.formalBindings.filter((binding) => binding.status === 'FROZEN' || binding.status === 'KERNEL_CERTIFIED').slice(-8).map((binding) => ({ id: binding.id, originalStatement: binding.originalStatement, formalIr: binding.formalIr, leanStatement: binding.leanStatement, equivalenceStatus: binding.equivalenceStatus })),
       sources,
       literature: request.snapshot.literature.slice(-30).map((record) => ({
         sourceId: record.sourceId, title: record.title, authors: record.authors, year: record.year, venue: record.venue,
@@ -376,7 +379,7 @@ export class ResponsesProvider implements ModelProvider {
     const sourceInstruction = sources.length || request.snapshot.literature.length
       ? ' Imported source chunks and literature metadata are authorized research context. Read every supplied chunk before responding, identify the source title and chunk index when relying on it, and do not claim full-document review when completeDocumentIncluded is false. Cite literature only by the supplied title plus DOI, arXiv ID, or URL; never invent a reference.'
       : '';
-    const prompt = `Act as the ${request.role} during stage ${request.stage}. Return exactly one JSON object matching this shape and field types:\n${JSON.stringify(roleActionContract)}\nArray item contracts (instructions only; do not copy placeholder values): ${JSON.stringify(roleActionItemContract)}\nUse [] when a collection has no relevant item. nextStage must be an uppercase research stage.${toolInstruction}${sourceInstruction} Never label model output as verified; citations may only use supplied source chunks; model proof steps are uncertain until independently checked. Context:\n${JSON.stringify(context)}`;
+    const prompt = `Act as the ${request.role} during stage ${request.stage}. Return exactly one JSON object matching this shape and field types:\n${JSON.stringify(roleActionContract)}\nArray item contracts (instructions only; do not copy placeholder values): ${JSON.stringify(roleActionItemContract)}\nUse [] when a collection has no relevant item. nextStage must be an uppercase research stage.${toolInstruction}${sourceInstruction} A lean_check must include the id of a frozen formalBindings entry as bindingId, and its declaration header must exactly match that entry. Never create or substitute a new formal mapping at verification time. A kernel result for equivalenceStatus NOT_INDEPENDENTLY_CERTIFIED must be labelled Lean-statement-only, not as verification of the original-language claim. Never label model output as verified; citations may only use supplied source chunks; model proof steps are uncertain until independently checked. Context:\n${JSON.stringify(context)}`;
     const response = await this.requestJsonWithMeta(prompt, signal, hasNativeTools ? request.snapshot.project.id : undefined);
     let valueToRepair = normalizeRoleActionPayload(response.value);
     let parsed = roleActionSchema.safeParse(valueToRepair);

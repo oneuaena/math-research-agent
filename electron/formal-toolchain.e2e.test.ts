@@ -29,7 +29,7 @@ const emptyAction = (stage: AgentStage): RoleAction => ({
 const realFormalToolchain = resolveLeanRuntime('').available ? describe : describe.skip;
 
 realFormalToolchain('Agent formal verification toolchain', () => {
-  it('executes Python, Z3, and Lean and promotes only the faithfully mapped kernel proof', async () => {
+  it('executes Python, Z3, and Lean without promoting an AI-proposed mapping to the original claim', async () => {
     const directory = mkdtempSync(join(tmpdir(), 'mra-formal-e2e-'));
     const db = new ResearchDatabase(join(directory, 'research.sqlite3'));
     const tools = new ToolRunner(directory, () => ({ pythonPath: process.env.MRA_TEST_PYTHON || 'python', leanPath: '', maxToolSeconds: 120 }));
@@ -45,7 +45,7 @@ realFormalToolchain('Agent formal verification toolchain', () => {
           target: { relation: '=', left: 'n', right: 'n', description: theorem },
           equivalentForms: ['n = n'], searchParameters: { min: 0, max: 99 }, validationRules: ['exact integer equality'],
           executable: { kind: 'finite-search', variable: 'n', expression: 'n == n', predicate: 'custom', range: { min: 0, max: 99, sampleCount: 100 }, exactArithmetic: true },
-          symbolicExpressions: ['n = n'], naturalLanguageOnly: false, uncertainty: [], confidence: 1,
+          symbolicExpressions: ['n = n'], leanStatement: 'theorem reflexiveNat (n : Nat) : n = n', naturalLanguageOnly: false, uncertainty: [], confidence: 1,
         });
       },
       async runRole(request: ProviderRoleRequest) {
@@ -59,10 +59,11 @@ realFormalToolchain('Agent formal verification toolchain', () => {
         if (request.stage === 'SYMBOLIC_VERIFY') action.toolCalls.push({ name: 'z3_check', purpose: 'Check the negated SMT encoding', input: { smt2: '(declare-const n Int) (assert (not (= n n)))' } });
         if (request.stage === 'FORMAL_VERIFY') {
           const proof = db.getProject(request.snapshot.project.id, false).proofs.at(-1)!;
+          const binding = request.snapshot.formalBindings.at(-1)!;
           action.toolCalls.push({
             name: 'lean_check',
             purpose: 'Verify equality reflexivity with the Lean kernel',
-            input: { code: 'theorem reflexiveNat (n : Nat) : n = n := by\n  rfl', proofId: proof.id, formalizationOf: proof.theorem },
+            input: { code: 'theorem reflexiveNat (n : Nat) : n = n := by\n  rfl', bindingId: binding.id, proofId: proof.id, formalizationOf: proof.theorem },
           });
         }
         return roleActionSchema.parse(action);
@@ -76,14 +77,15 @@ realFormalToolchain('Agent formal verification toolchain', () => {
       await orchestrator.run(snapshot.project.id, new AbortController().signal);
 
       const completed = db.getProject(snapshot.project.id, false);
-      expect(completed.sessions.at(-1)?.status).toBe('COMPLETE');
+      expect(completed.sessions.at(-1)?.status).toBe('PAUSED');
       expect(completed.experiments.find((item) => item.tool === 'run_python')).toMatchObject({ status: 'succeeded', verificationStatus: 'computationally-verified' });
       expect(completed.experiments.find((item) => item.tool === 'z3_check')).toMatchObject({ status: 'succeeded', verificationStatus: 'bounded-check' });
       expect(completed.experiments.find((item) => item.tool === 'lean_check')).toMatchObject({ status: 'succeeded', verificationStatus: 'formally-verified' });
       expect(completed.evidence.some((item) => item.verificationLevel === 'BOUNDED_CHECK')).toBe(true);
       expect(completed.evidence.some((item) => item.verificationLevel === 'UNSAT')).toBe(true);
       expect(completed.evidence.some((item) => item.verificationLevel === 'FORMALLY_VERIFIED')).toBe(true);
-      expect(completed.proofs.at(-1)).toMatchObject({ theorem, status: 'VERIFIED', verificationStatus: 'formally-verified', independentlyReviewed: true });
+      expect(completed.formalBindings).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'KERNEL_CERTIFIED', equivalenceStatus: 'NOT_INDEPENDENTLY_CERTIFIED' })]));
+      expect(completed.proofs.at(-1)).toMatchObject({ theorem, status: 'CANDIDATE', verificationStatus: 'llm-assessed-only', independentlyReviewed: true });
 
       const auditPath = join(directory, 'logs', 'verification-audit.jsonl');
       expect(existsSync(auditPath)).toBe(true);

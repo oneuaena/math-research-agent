@@ -1,5 +1,18 @@
 # Changelog
 
+## [1.2.2] - 2026-08-25
+
+### Fixed
+
+- Moved Formal Binding creation from `lean_check` to `FORMALIZE`. A Lean run now requires an already frozen `bindingId`; it never creates a binding from the submitted proof source.
+- Added a proof-free Lean declaration field to the formalization contract. The declaration, source claim, and Formal IR are SHA-256 bound before proof execution; a declaration change, missing binding, incomplete legacy binding, or renderer-side record write is rejected.
+- Separated mapping scope: AI-proposed mappings are recorded as `LEAN_STATEMENT_ONLY`, while only a user-confirmed mapping can participate in a full original-claim promotion after the existing independent-review checks.
+- Applied the same frozen-binding check to provider-native tool calls, not only deferred orchestrator calls.
+
+### Changed
+
+- Formal Lab is now a two-step flow: explicitly confirm/freeze a mapping, then run Lean against it. Editing any of the mapping inputs requires freezing again.
+
 ## [1.2.1] - 2026-08-25
 
 - Added a main-process Formal Binding Gate. It locks the original claim, Formal IR, exact Lean declaration, proof source, and successful kernel certificate with SHA-256 links; a swapped Lean declaration is rejected before kernel execution.

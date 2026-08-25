@@ -27,7 +27,7 @@ const api: DesktopApi = {
   },
   tools: { run: (invocation: ToolInvocation) => ipcRenderer.invoke('tools:run', invocation) },
   formalBindings: {
-    create: (projectId, originalStatement, formalIr, leanSource) => ipcRenderer.invoke('formal-bindings:create', projectId, originalStatement, formalIr, leanSource),
+    freezeUserConfirmed: (projectId, originalStatement, formalIr, leanSource) => ipcRenderer.invoke('formal-bindings:freeze-user-confirmed', projectId, originalStatement, formalIr, leanSource),
     verify: (projectId, bindingId, leanSource) => ipcRenderer.invoke('formal-bindings:verify', projectId, bindingId, leanSource),
   },
   documents: {

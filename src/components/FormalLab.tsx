@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { BookOpenCheck, Search, ShieldCheck, TriangleAlert } from 'lucide-react';
-import type { Experiment, VerificationStatus } from '../shared/types';
+import type { Experiment, FormalBinding, VerificationStatus } from '../shared/types';
 import { useAppStore } from '../store';
 import { randomUUID } from '../utils';
 
@@ -33,6 +33,7 @@ export function FormalLab() {
   const [formalIr, setFormalIr] = useState<string>('quantifiers: forall a b : Real\nassumptions: none\nconclusion: a + b = b + a');
   const [code, setCode] = useState<string>(TEMPLATES.algebra.code);
   const [running, setRunning] = useState(false);
+  const [frozenBinding, setFrozenBinding] = useState<FormalBinding | null>(null);
   const [result, setResult] = useState<{ ok: boolean; text: string; artifact?: string } | null>(null);
   const [query, setQuery] = useState('');
   const [searching, setSearching] = useState(false);
@@ -43,17 +44,31 @@ export function FormalLab() {
     setTarget(TEMPLATES[key].target);
     setCode(TEMPLATES[key].code);
     setFormalIr(TEMPLATES[key].target ? `claim: ${TEMPLATES[key].target}` : '');
+    setFrozenBinding(null);
     setResult(null);
   };
 
+  const freeze = async () => {
+    setRunning(true);
+    try {
+      const binding = await window.research.formalBindings.freezeUserConfirmed(snapshot.project.id, target, formalIr, code);
+      setFrozenBinding(binding);
+      setResult({ ok: true, text: 'Mapping frozen. Subsequent Lean runs must use this exact declaration header. The kernel can verify the Lean statement; your confirmation records the original-language mapping.' });
+    } catch (error) {
+      setResult({ ok: false, text: error instanceof Error ? error.message : 'Could not freeze the statement mapping.' });
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const run = async () => {
+    if (!frozenBinding) return;
     setRunning(true);
     const now = new Date().toISOString();
     const item: Experiment = { id: randomUUID(), projectId: snapshot.project.id, purpose: target.trim() || 'Lean 4 formal proof check', code, tool: 'lean_check', input: code, output: '', interpretation: target.trim() ? `Formal target: ${target.trim()}` : '', relatedNodeId: null, status: 'running', durationMs: null, createdAt: now, updatedAt: now };
     try {
       await saveRecord('experiments', item);
-      const binding = await window.research.formalBindings.create(snapshot.project.id, target, formalIr, code);
-      const checked = await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: item.purpose, input: { code, bindingId: binding.id } });
+      const checked = await window.research.tools.run({ projectId: snapshot.project.id, name: 'lean_check', purpose: item.purpose, input: { code, bindingId: frozenBinding.id } });
       await saveRecord('experiments', { ...item, output: checked.output || checked.error || checked.stderr || '', status: checked.ok ? 'succeeded' : 'failed', durationMs: checked.durationMs, environment: checked.environment, verificationStatus: experimentStatus(checked), updatedAt: new Date().toISOString() });
       setResult({ ok: checked.ok, text: checked.output || checked.error || checked.stderr || 'No output.', artifact: checked.artifactLocation });
     } finally {
@@ -74,16 +89,16 @@ export function FormalLab() {
 
   return <div className="formal-lab">
     <header className="view-toolbar"><div><h1>Formal lab</h1><span>Lean 4 · pinned Mathlib · local artifacts</span></div><span className="formal-kernel"><ShieldCheck size={15} />Kernel gate</span></header>
-    <section className="formal-notice"><BookOpenCheck size={18} /><div><strong>Locked statement binding</strong><span>Each run stores SHA-256 IDs for the original claim, Formal IR, Lean declaration, proof source, and kernel certificate. The kernel proves the locked Lean declaration; the binding makes any declaration swap fail.</span></div></section>
+    <section className="formal-notice"><BookOpenCheck size={18} /><div><strong>Frozen statement mapping</strong><span>First confirm and freeze the natural-language target, Formal IR, and Lean declaration. Lean can then prove only that locked declaration; an AI-proposed mapping is never presented as independently certified equivalence to the original language.</span></div></section>
     <div className="formal-templates">{(Object.keys(TEMPLATES) as Array<keyof typeof TEMPLATES>).map((key) => <button key={key} className="button secondary compact" onClick={() => applyTemplate(key)}>{TEMPLATES[key].label}</button>)}</div>
     <section className="formal-editor-grid">
-      <label className="field"><span>Natural-language target</span><textarea rows={6} value={target} onChange={(event) => setTarget(event.target.value)} placeholder="State assumptions and the exact conclusion." /></label>
-      <label className="field"><span>Formal specification / Math IR</span><textarea rows={6} value={formalIr} onChange={(event) => setFormalIr(event.target.value)} placeholder="Quantifiers, domains, assumptions, definitions, and conclusion." /></label>
-      <label className="field"><span>Lean 4 source</span><textarea className="lean-source" rows={15} value={code} onChange={(event) => setCode(event.target.value)} spellCheck={false} /></label>
+      <label className="field"><span>Natural-language target</span><textarea rows={6} value={target} onChange={(event) => { setTarget(event.target.value); setFrozenBinding(null); }} placeholder="State assumptions and the exact conclusion." /></label>
+      <label className="field"><span>Formal specification / Math IR</span><textarea rows={6} value={formalIr} onChange={(event) => { setFormalIr(event.target.value); setFrozenBinding(null); }} placeholder="Quantifiers, domains, assumptions, definitions, and conclusion." /></label>
+      <label className="field"><span>Lean 4 source</span><textarea className="lean-source" rows={15} value={code} onChange={(event) => { setCode(event.target.value); setFrozenBinding(null); }} spellCheck={false} /></label>
     </section>
     {gaps.length > 0 && <section className="formal-gaps"><TriangleAlert size={16} /><div><strong>{gaps.length} unresolved proof gap{gaps.length === 1 ? '' : 's'}</strong><span>{gaps.map(({ line, index }) => `L${index + 1}: ${line.trim()}`).join(' · ')}</span></div></section>}
-    <div className="formal-actions"><button className="button primary" disabled={running || gaps.length > 0 || !target.trim() || !formalIr.trim()} onClick={() => void run()}>{running ? 'Checking…' : 'Bind and run Lean kernel check'}</button><span>Uses a project-local Mathlib v4.32.0 dependency and writes a binding plus an audit artifact for every run.</span></div>
-    {result && <section className={`formal-result ${result.ok ? 'passed' : 'failed'}`}><strong>{result.ok ? 'FORMALLY VERIFIED — submitted Lean artifact' : 'NOT VERIFIED'}</strong><pre>{result.text}</pre>{result.artifact && <button className="export-path" onClick={() => void window.research.system.openPath(result.artifact!)}>{result.artifact}</button>}</section>}
+    <div className="formal-actions"><button className="button secondary" disabled={running || gaps.length > 0 || !target.trim() || !formalIr.trim()} onClick={() => void freeze()}>{running ? 'Freezing…' : 'I confirm mapping and freeze'}</button><button className="button primary" disabled={running || gaps.length > 0 || !frozenBinding} onClick={() => void run()}>{running ? 'Checking…' : 'Run Lean against frozen mapping'}</button><span>{frozenBinding ? `Frozen ${frozenBinding.id.slice(0, 8)} · user-confirmed mapping` : 'Freeze the mapping before Lean can run.'}</span></div>
+    {result && <section className={`formal-result ${result.ok ? 'passed' : 'failed'}`}><strong>{result.ok ? (result.artifact ? 'LEAN STATEMENT FORMALLY VERIFIED — USER-CONFIRMED MAPPING' : 'MAPPING FROZEN') : 'NOT VERIFIED'}</strong><pre>{result.text}</pre>{result.artifact && <button className="export-path" onClick={() => void window.research.system.openPath(result.artifact!)}>{result.artifact}</button>}</section>}
     <section className="mathlib-search"><header><Search size={16} /><div><h2>Local Mathlib search</h2><span>Searches the pinned local source only; no theorem text is sent to an external service.</span></div></header><div><input value={query} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') void search(); }} placeholder="e.g. card Finset" /><button className="button secondary compact" disabled={searching || query.trim().length < 2} onClick={() => void search()}>{searching ? 'Searching…' : 'Search'}</button></div>{searchResult && <pre>{searchResult}</pre>}</section>
   </div>;
 }

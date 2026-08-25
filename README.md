@@ -12,13 +12,13 @@ This is an independent open-source project. References to OpenAI-compatible APIs
 
 ### Windows 10/11 x64
 
-- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-Setup-1.2.0.exe)** — SHA-256 `4712516FF2FD330BFDA815E6E575CFCD41EE309059B11832236EF98E2362D74B`
-- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-Windows-Software.zip)** — SHA-256 `D59C198D980BF0ECC20A51A078CF6D151EEBD436A6171B2EC2039ED85744F5FF`
+- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-Setup-1.2.2.exe)** — SHA-256 `073AF6569F27441150B15C2A191CFF5CBD333DF6D4289359B029287088E4173D`
+- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-Windows-Software.zip)** — SHA-256 `B7B9329683450A1C3F4BCA0709F58542DB094B1897C4E08ECCC1258C6604CCE1`
 
 ### macOS 13 or newer
 
-- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-arm64.zip)** — SHA-256 `E47B4939843B2F8297A70804D903536E5B731AAB96A356AAE71E7BE406640EC4`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.0/Math-Research-Agent-1.2.0-mac-x64.zip)** — SHA-256 `97EA797D41E47750938D5FEF87D58B15BE8FF131F26F70870BFF553C50AE4BE1`
+- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-arm64.zip)** — SHA-256 `2A68734E6CACE11D04AD61FF0627FEC53EC7128909E9384B0A9C9F031BE8ACD0`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.2.2/Math-Research-Agent-1.2.2-mac-x64.zip)** — SHA-256 `3912D8D9076867E28326E42D712CDC324C199E56693BB3FB1051134E5DD18888`
 
 On Windows, run the installer or extract the portable ZIP. On macOS, extract the ZIP, drag the app into **Applications**, then open it. After launch, open **Settings**, enter your own provider details, and run **Runtime Diagnostics**.
 
@@ -52,10 +52,21 @@ The project distinguishes evidence levels instead of collapsing them into “pro
 | `COMPUTATIONALLY VERIFIED` | A recorded machine computation checked a bounded claim or artifact. |
 | `SYMBOLICALLY VERIFIED` | A symbolic engine checked the specified transformation or identity. |
 | `EXACTLY VERIFIED` | Exact arithmetic or an exact rerunnable witness checked the stated claim. |
-| `FORMALLY VERIFIED` | Lean's kernel accepted the submitted theorem and the app linked it to an independently reviewed proof with an exact matching formalization target. |
+| `FORMALLY VERIFIED` | For an original-language claim, this requires a user-confirmed frozen mapping, an exact proof link, independent review, valid critical steps, and Lean kernel acceptance. AI-proposed mappings are labelled `LEAN STATEMENT ONLY` even when Lean accepts them. |
 | `LLM ASSESSED ONLY` | A model judged the statement; no independent machine or formal evidence establishes it. |
 
 A candidate proof remains uncertain when a critical step is invalid, unresolved, requires a missing lemma, or lacks the required computation/formalization. See [Verification policy](docs/VERIFICATION.md).
+
+## Formal mapping gate
+
+Formal proof work has two separate questions: whether Lean accepted a particular declaration, and whether that declaration faithfully represents the user's original-language claim. The application does not treat them as the same question.
+
+1. During `FORMALIZE`, a provider may propose a **proof-free** Lean declaration header alongside the structured Formal IR. The main process freezes the normalized source claim, Formal IR, declaration, and SHA-256 identifiers before proof execution.
+2. Every `lean_check` must cite that existing frozen `bindingId`; its declaration header must hash-match exactly. A missing ID, a changed declaration, or a legacy/incomplete binding is rejected before Lean runs. Provider-native calls pass through the same check.
+3. An AI-proposed mapping produces the explicit record `LEAN STATEMENT ONLY — original-language equivalence not independently certified`. It cannot promote the original claim to a verified proof.
+4. In Formal Lab, a user can explicitly confirm and freeze a mapping. Only that scope can enter the existing independently-reviewed proof-promotion gate; the Lean kernel still certifies the Lean statement, not a natural-language translation by itself.
+
+Frozen bindings are main-process records. The renderer cannot save or delete them through the general record API. This protects the provenance chain against accidental UI/model substitutions; it is not a solution to the general semantic-equivalence problem.
 
 ## Features
 
@@ -67,6 +78,7 @@ A candidate proof remains uncertain when a critical step is invalid, unresolved,
 - Project chat with explicit research-control routing and bounded context retrieved from imported documents.
 - Local document extraction/chunk indexing plus optional arXiv and Crossref literature search.
 - Audited Python, SymPy, Z3, and Lean tool runs with exact input artifacts, separated output/error streams, timeouts, and strict evidence labels.
+- Frozen Formal Binding Gate: FORMALIZE-time declaration binding, hash-checked Lean runs, mapping-scope labels, and a two-step user confirmation flow in Formal Lab.
 - OpenAI-compatible `/chat/completions` transport with bounded retries, SSE normalization, tool-call handling, reasoning-content compatibility, and structured-JSON recovery.
 - Local Markdown/LaTeX report export and JSON counterexample evidence export.
 - Restart recovery that converts interrupted runs to a resumable paused checkpoint.

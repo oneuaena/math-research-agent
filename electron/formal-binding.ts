@@ -24,17 +24,28 @@ export function leanStatementFromSource(source: string): string {
   return statement;
 }
 
+/** Validates a proof-free declaration supplied by FORMALIZE before it is frozen. */
+export function leanStatementFromDeclaration(declaration: string): string {
+  const clean = canonical(stripComments(declaration));
+  if (/:=|\bwhere\b/.test(clean)) throw new Error('Formalization must freeze a Lean declaration header, not a proof body.');
+  if (!/^(?:theorem|lemma|example)\b/.test(clean)) throw new Error('Lean declaration must begin with theorem, lemma, or example.');
+  if (!/:/.test(clean)) throw new Error('Lean declaration must include its proposition after a colon.');
+  if (clean.length < 8 || clean.length > 20_000) throw new Error('Lean theorem statement is outside the permitted size range.');
+  return clean;
+}
+
 export function createFormalBinding(input: {
   projectId: string;
   originalStatement: string;
   formalIr: string;
-  leanSource: string;
+  leanStatement: string;
+  mappingAuthority: FormalBinding['mappingAuthority'];
   id?: string;
   createdAt?: string;
 }): FormalBinding {
   const originalStatement = canonical(input.originalStatement);
   const formalIr = canonical(input.formalIr);
-  const leanStatement = leanStatementFromSource(input.leanSource);
+  const leanStatement = leanStatementFromDeclaration(input.leanStatement);
   if (!originalStatement || !formalIr) throw new Error('Original statement and Formal IR are both required before a Lean check.');
   if (originalStatement.length > 20_000 || formalIr.length > 50_000) throw new Error('Formal binding inputs exceed the permitted size limit.');
   const originalHash = digest(originalStatement);
@@ -44,25 +55,43 @@ export function createFormalBinding(input: {
   return {
     id: input.id ?? randomUUID(), projectId: input.projectId, originalStatement, formalIr, leanStatement,
     originalHash, formalIrHash, leanStatementHash,
-    bindingHash: digest(`${originalHash}\n${formalIrHash}\n${leanStatementHash}`),
-    proofSourceHash: null, certificateHash: null, status: 'BOUND', createdAt, updatedAt: createdAt,
+    bindingHash: digest(`${originalHash}\n${formalIrHash}\n${leanStatementHash}\n${input.mappingAuthority}`),
+    proofSourceHash: null, certificateHash: null,
+    mappingAuthority: input.mappingAuthority,
+    equivalenceStatus: input.mappingAuthority === 'USER_CONFIRMED' ? 'USER_CONFIRMED' : 'NOT_INDEPENDENTLY_CERTIFIED',
+    status: 'FROZEN', createdAt, updatedAt: createdAt,
   };
 }
 
 export class FormalBindingService {
   constructor(private readonly database: ResearchDatabase) {}
 
-  create(projectId: string, originalStatement: string, formalIr: string, leanSource: string): FormalBinding {
-    this.database.getProject(projectId, false);
-    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanSource });
+  private saveFrozen(binding: FormalBinding): FormalBinding {
+    const existing = this.database.getProject(binding.projectId, false).formalBindings
+      .find((item) => item.bindingHash === binding.bindingHash && item.status !== 'INVALID');
+    if (existing) return existing;
     this.database.saveRecord('formalBindings', binding);
     return binding;
   }
 
+  freezeUserConfirmed(projectId: string, originalStatement: string, formalIr: string, leanSource: string): FormalBinding {
+    this.database.getProject(projectId, false);
+    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanStatement: leanStatementFromSource(leanSource), mappingAuthority: 'USER_CONFIRMED' });
+    return this.saveFrozen(binding);
+  }
+
+  freezeAiProposed(projectId: string, originalStatement: string, formalIr: string, leanStatement: string): FormalBinding {
+    this.database.getProject(projectId, false);
+    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanStatement, mappingAuthority: 'AI_PROPOSED' });
+    return this.saveFrozen(binding);
+  }
+
   verify(projectId: string, bindingId: string, leanSource: string): FormalBindingValidation {
     const binding = this.database.getProject(projectId, false).formalBindings.find((item) => item.id === bindingId);
-    if (!binding) return { ok: false, error: 'FORMAL_BINDING_REQUIRED: create a project Formal IR binding before running Lean.' };
+    if (!binding) return { ok: false, error: 'FORMAL_BINDING_REQUIRED: select a frozen FORMALIZE binding before running Lean.' };
     if (binding.status === 'INVALID') return { ok: false, error: 'FORMAL_BINDING_INVALID: this binding was invalidated and cannot certify a proof.' };
+    if (binding.status !== 'FROZEN' && binding.status !== 'KERNEL_CERTIFIED') return { ok: false, error: 'FORMAL_BINDING_NOT_FROZEN: legacy or incomplete bindings cannot certify a proof.' };
+    if (!binding.mappingAuthority || !binding.equivalenceStatus) return { ok: false, error: 'FORMAL_BINDING_NOT_FROZEN: legacy bindings cannot be used after the binding-gate upgrade.' };
     try {
       const statement = leanStatementFromSource(leanSource);
       const statementHash = digest(statement);

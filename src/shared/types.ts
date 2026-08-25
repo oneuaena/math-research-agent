@@ -117,6 +117,8 @@ export interface StructuredSpecification {
   validationRules: string[];
   executable: ExecutableSpecification | null;
   symbolicExpressions: string[];
+  /** A declaration header proposed during FORMALIZE, never a proof body. */
+  leanStatement: string | null;
   naturalLanguageOnly: boolean;
   uncertainty: string[];
   confidence: number;
@@ -143,7 +145,11 @@ export interface FormalBinding {
   bindingHash: string;
   proofSourceHash: string | null;
   certificateHash: string | null;
-  status: 'BOUND' | 'KERNEL_CERTIFIED' | 'INVALID';
+  /** Who accepted the natural-language-to-Lean mapping before any proof ran. */
+  mappingAuthority: 'AI_PROPOSED' | 'USER_CONFIRMED';
+  /** The kernel may certify the Lean statement without certifying its natural-language interpretation. */
+  equivalenceStatus: 'NOT_INDEPENDENTLY_CERTIFIED' | 'USER_CONFIRMED';
+  status: 'FROZEN' | 'KERNEL_CERTIFIED' | 'INVALID';
   createdAt: string;
   updatedAt: string;
 }
@@ -731,7 +737,7 @@ export interface DesktopApi {
   };
   tools: { run(invocation: ToolInvocation): Promise<ToolResult> };
   formalBindings: {
-    create(projectId: string, originalStatement: string, formalIr: string, leanSource: string): Promise<FormalBinding>;
+    freezeUserConfirmed(projectId: string, originalStatement: string, formalIr: string, leanSource: string): Promise<FormalBinding>;
     verify(projectId: string, bindingId: string, leanSource: string): Promise<FormalBindingValidation>;
   };
   documents: {

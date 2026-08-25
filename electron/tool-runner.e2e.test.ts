@@ -94,7 +94,7 @@ describe('real project workspace execution chain', () => {
     const provider: ModelProvider = {
       async respondChat() { return ''; },
       async runStage(stage): Promise<StageResult> { return { title: stage, summary: 'unused', status: 'unverified' }; },
-      async formalize() { return { quantifiers: [], variables: [], domains: {}, assumptions: [], target: { relation: '=', left: '0', right: '0', description: 'fixture' }, equivalentForms: [], searchParameters: { min: 0, max: 1 }, validationRules: [], executable: null, symbolicExpressions: [], naturalLanguageOnly: true, uncertainty: [], confidence: 1 }; },
+      async formalize() { return { quantifiers: [], variables: [], domains: {}, assumptions: [], target: { relation: '=', left: '0', right: '0', description: 'fixture' }, equivalentForms: [], searchParameters: { min: 0, max: 1 }, validationRules: [], executable: null, symbolicExpressions: [], leanStatement: null, naturalLanguageOnly: true, uncertainty: [], confidence: 1 }; },
       async runRole(request: ProviderRoleRequest) { return action(request.stage); },
     };
     try {

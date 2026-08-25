@@ -135,9 +135,15 @@ function registerIpc(): void {
   ipcMain.handle('projects:get', (_event, id: string) => database.getProject(id));
   ipcMain.handle('projects:update', (_event, id: string, patch: Partial<CreateProjectInput>) => database.updateProject(id, patch));
   ipcMain.handle('projects:remove', (_event, id: string) => database.removeProject(id));
-  ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => database.saveRecord(collection, record));
-  ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => database.removeRecord(collection, id, projectId));
-  ipcMain.handle('formal-bindings:create', (_event, projectId: string, originalStatement: string, formalIr: string, leanSource: string) => formalBindings.create(projectId, originalStatement, formalIr, leanSource));
+  ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => {
+    if (collection === 'formalBindings') throw new Error('FORMAL_BINDING_IMMUTABLE: use the dedicated binding gate.');
+    return database.saveRecord(collection, record);
+  });
+  ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => {
+    if (collection === 'formalBindings') throw new Error('FORMAL_BINDING_IMMUTABLE: frozen bindings cannot be deleted from the renderer.');
+    return database.removeRecord(collection, id, projectId);
+  });
+  ipcMain.handle('formal-bindings:freeze-user-confirmed', (_event, projectId: string, originalStatement: string, formalIr: string, leanSource: string) => formalBindings.freezeUserConfirmed(projectId, originalStatement, formalIr, leanSource));
   ipcMain.handle('formal-bindings:verify', (_event, projectId: string, bindingId: string, leanSource: string) => formalBindings.verify(projectId, bindingId, leanSource));
 
   ipcMain.handle('agent:start', (_event, projectId: string) => jobs.start(projectId));
@@ -149,7 +155,7 @@ function registerIpc(): void {
     const started = new Date().toISOString();
     const bindingId = invocation.name === 'lean_check' && typeof invocation.input.bindingId === 'string' ? invocation.input.bindingId : '';
     const bindingCheck = invocation.name === 'lean_check'
-      ? bindingId ? formalBindings.verify(invocation.projectId, bindingId, String(invocation.input.code ?? '')) : { ok: false, error: 'FORMAL_BINDING_REQUIRED: create a project Formal IR binding before running Lean.' }
+      ? bindingId ? formalBindings.verify(invocation.projectId, bindingId, String(invocation.input.code ?? '')) : { ok: false, error: 'FORMAL_BINDING_REQUIRED: select a frozen FORMALIZE binding before running Lean.' }
       : { ok: true };
     const result = !bindingCheck.ok
       ? { ok: false, success: false, output: '', stdout: '', stderr: '', error: bindingCheck.error, errorType: 'VALIDATION_ERROR' as const, exitCode: null, durationMs: 0, timeout: false, verificationStatus: 'PROGRAM_FAILURE' as const }

@@ -1,6 +1,6 @@
 {
   "name": "math-research-agent",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
   "description": "A reproducible, auditable autonomous research workspace for experimental mathematics and conjecture exploration.",
   "author": "Math Research Agent Contributors",
