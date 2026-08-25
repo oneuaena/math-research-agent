@@ -5,6 +5,7 @@ export const V1_STAGES = [
   'INITIALIZE', 'FORMALIZE', 'PLAN', 'LITERATURE', 'EXPLORE', 'EXPERIMENT', 'PATTERN_DISCOVERY',
   'LEMMA_GENERATION', 'PROOF_ATTEMPT', 'PROOF_CRITIQUE', 'COUNTEREXAMPLE_SEARCH', 'SYMBOLIC_VERIFY',
   'FORMAL_VERIFY', 'SYNTHESIZE', 'REFLECT', 'REPLAN', 'CHECKPOINT', 'COMPLETE', 'PAUSED', 'FAILED',
+  'DISCOVERY_SEARCH', 'DISCOVERY_ANALYZE', 'DISCOVERY_REFINE', 'PROOF_SEARCH',
 ] as const satisfies readonly AgentStage[];
 
 export const formalizationSchema = z.object({
@@ -23,6 +24,11 @@ export const formalizationSchema = z.object({
     range: z.object({ min: z.number().int().nullable(), max: z.number().int().nullable(), sampleCount: z.number().int().min(1).max(1_000_000) }),
     exactArithmetic: z.boolean(),
   }).nullable(),
+  discoverySpecification: z.object({
+    representation: z.object({ kind: z.enum(['SET', 'SUBSET', 'TUPLE', 'SEQUENCE', 'PERMUTATION', 'MATRIX', 'GRAPH', 'HYPERGRAPH', 'INTEGER_VECTOR', 'BOOLEAN_VECTOR', 'STRUCTURED_OBJECT', 'PROGRAM']), dimensions: z.record(z.string(), z.union([z.number().int(), z.string().max(4_000), z.boolean()])), schemaVersion: z.literal(1) }).strict(),
+    evaluator: z.object({ version: z.literal(1), constraints: z.array(z.object({ kind: z.string().min(1).max(64) }).passthrough()).max(64), objectives: z.array(z.object({ name: z.string().min(1).max(100), direction: z.enum(['minimize', 'maximize', 'target']), metric: z.enum(['violations', 'coverage', 'spread', 'novelty', 'value']), target: z.number().optional() })).min(1).max(12), aggregation: z.enum(['pareto', 'lexicographic', 'weighted']), weights: z.record(z.string(), z.number()).optional() }).strict(),
+    semanticScope: z.string().min(1).max(12_000),
+  }).strict().nullable().optional(),
   symbolicExpressions: z.array(z.string().max(10_000)).max(30),
   leanStatement: z.string().max(20_000).nullable(),
   naturalLanguageOnly: z.boolean(), uncertainty: z.array(z.string().max(2000)).max(50),
@@ -63,8 +69,8 @@ export const roleActionSchema = z.object({
   rationaleSummary: z.string().min(1).max(4000),
   evidence: z.array(z.object({
     title: z.string().min(1).max(300), content: z.string().max(10_000),
-    type: z.enum(['exact-computation', 'symbolic-computation', 'numerical-computation', 'user-source', 'model-analysis', 'formal-check']),
-    verificationStatus: z.enum(['exactly-verified', 'computationally-verified', 'symbolically-verified', 'numerically-supported', 'llm-assessed-only', 'unverified']),
+    type: z.enum(['exact-computation', 'symbolic-computation', 'numerical-computation', 'user-source', 'model-analysis', 'formal-check', 'discovery-search', 'evaluation-certificate', 'proof-search']),
+    verificationStatus: z.enum(['formally-verified', 'exactly-verified', 'computationally-verified', 'symbolically-verified', 'numerically-supported', 'llm-assessed-only', 'unverified']),
     reproducible: z.boolean(),
   })).max(30).default([]),
   proposedNodes: z.array(z.object({
@@ -79,11 +85,17 @@ export const roleActionSchema = z.object({
     status: z.enum(['VALID', 'INVALID', 'UNCERTAIN', 'REQUIRES_LEMMA', 'REQUIRES_COMPUTATION', 'REQUIRES_FORMALIZATION']),
     comment: z.string().max(4000),
   })).max(50).default([]),
+  formalTactics: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   toolCalls: z.array(z.object({
     name: z.enum(['run_python', 'symbolic_simplify', 'solve_equation', 'differentiate', 'integrate', 'matrix_compute', 'capability_check', 'z3_check', 'lean_check', 'mathlib_search', 'workspace_write', 'workspace_read', 'download_file', 'run_command']),
     purpose: z.string().min(1).max(500), input: z.record(z.string(), z.unknown()),
   })).max(8).default([]),
   nativeToolExecutions: z.array(nativeToolExecutionSchema).max(12).optional(),
+  discoverySpecification: z.object({
+    representation: z.object({ kind: z.enum(['SET', 'SUBSET', 'TUPLE', 'SEQUENCE', 'PERMUTATION', 'MATRIX', 'GRAPH', 'HYPERGRAPH', 'INTEGER_VECTOR', 'BOOLEAN_VECTOR', 'STRUCTURED_OBJECT', 'PROGRAM']), dimensions: z.record(z.string(), z.union([z.number().int(), z.string().max(4_000), z.boolean()])), schemaVersion: z.literal(1) }).strict(),
+    evaluator: z.object({ version: z.literal(1), constraints: z.array(z.object({ kind: z.string().min(1).max(64) }).passthrough()).max(64), objectives: z.array(z.object({ name: z.string().min(1).max(100), direction: z.enum(['minimize', 'maximize', 'target']), metric: z.enum(['violations', 'coverage', 'spread', 'novelty', 'value']), target: z.number().optional() })).min(1).max(12), aggregation: z.enum(['pareto', 'lexicographic', 'weighted']), weights: z.record(z.string(), z.number()).optional() }).strict(),
+    semanticScope: z.string().min(1).max(12_000),
+  }).strict().nullable().optional(),
   nextStage: z.enum(V1_STAGES), failures: z.array(z.string().max(3000)).max(30).default([]),
   tokenUsage: z.object({ input: z.number().int().min(0), output: z.number().int().min(0), total: z.number().int().min(0) }).default({ input: 0, output: 0, total: 0 }),
 });
@@ -167,10 +179,12 @@ export const STAGE_ROLE: Partial<Record<AgentStage, ResearchRole>> = {
   COUNTEREXAMPLE_SEARCH: 'experimental-mathematician', SYMBOLIC_VERIFY: 'independent-verifier',
   FORMAL_VERIFY: 'independent-verifier', SYNTHESIZE: 'research-synthesizer', REFLECT: 'research-synthesizer',
   REPLAN: 'research-planner', CHECKPOINT: 'research-synthesizer',
+  DISCOVERY_SEARCH: 'experimental-mathematician', DISCOVERY_ANALYZE: 'explorer', DISCOVERY_REFINE: 'research-planner', PROOF_SEARCH: 'proof-builder',
 };
 
 export interface TransitionContext {
   hasSpecification: boolean;
+  hasDiscoverySpecification?: boolean;
   executable: boolean;
   sourceCount: number;
   proofHasGaps: boolean;
@@ -187,9 +201,10 @@ export function chooseNextStage(stage: AgentStage, context: TransitionContext): 
   }
   const transitions: Partial<Record<AgentStage, AgentStage>> = {
     INITIALIZE: 'FORMALIZE', FORMALIZE: 'PLAN', PLAN: context.sourceCount > 0 ? 'LITERATURE' : 'EXPLORE',
-    LITERATURE: 'EXPLORE', EXPLORE: context.executable ? 'EXPERIMENT' : 'PATTERN_DISCOVERY',
+    LITERATURE: 'EXPLORE', EXPLORE: context.hasDiscoverySpecification ? 'DISCOVERY_SEARCH' : context.executable ? 'EXPERIMENT' : 'PATTERN_DISCOVERY',
+    DISCOVERY_SEARCH: 'DISCOVERY_ANALYZE', DISCOVERY_ANALYZE: 'LEMMA_GENERATION', DISCOVERY_REFINE: 'DISCOVERY_SEARCH',
     EXPERIMENT: 'COUNTEREXAMPLE_SEARCH', COUNTEREXAMPLE_SEARCH: 'PATTERN_DISCOVERY',
-    PATTERN_DISCOVERY: 'LEMMA_GENERATION', LEMMA_GENERATION: 'PROOF_ATTEMPT', PROOF_ATTEMPT: 'PROOF_CRITIQUE',
+    PATTERN_DISCOVERY: 'LEMMA_GENERATION', LEMMA_GENERATION: 'PROOF_SEARCH', PROOF_SEARCH: 'PROOF_ATTEMPT', PROOF_ATTEMPT: 'PROOF_CRITIQUE',
     PROOF_CRITIQUE: context.proofHasGaps && context.cycle < 2 ? 'REFLECT' : 'SYMBOLIC_VERIFY',
     SYMBOLIC_VERIFY: 'FORMAL_VERIFY', FORMAL_VERIFY: 'SYNTHESIZE', REFLECT: 'REPLAN', REPLAN: 'EXPLORE',
     SYNTHESIZE: 'CHECKPOINT', CHECKPOINT: context.checkpointsInCycle >= 5 ? 'PAUSED' : 'EXPLORE',

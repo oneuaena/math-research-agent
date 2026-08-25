@@ -12,13 +12,13 @@ This is an independent open-source project. References to OpenAI-compatible APIs
 
 ### Windows 10/11 x64
 
-- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-Setup-1.3.0.exe)** — SHA-256 `A30B584C05B436FECCF256015AF0B52CB6F4364B78CE25BCEC253C6072094410`
-- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-Windows-Software.zip)** — SHA-256 `19F3A5FC63EDB46757F2F040CE95A0480C731A9A0AD78D695B942969298C5F1C`
+- **[Installer (.exe)](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-Setup-2.0.0.exe)** — SHA-256 `A2CCFFA89ED2F7A4D4D327E01924CB35CACE7A0CC5DE751BF03829522AA03284`
+- **[Portable software ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-2.0.0-Windows-Software.zip)** — SHA-256 `31EF9E5B32B434F6E8F2B4E2BB2CD8A93F233F9D91428226C65A1E2F2617C3E2`
 
 ### macOS 13 or newer
 
-- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-arm64.zip)** — SHA-256 `02AD3A7DA3B4EDC4A1DB79B1B8CA1B408021F27107F637FEE331DA134EA1FB42`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-x64.zip)** — SHA-256 `61DF7D7632204E7771E83714A0BABADAC36AF7083668C421B0BDDE7343D40796`
+- **[Apple Silicon (M1/M2/M3/M4/M5)](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-2.0.0-mac-arm64.zip)** — SHA-256 `12FC4ECB6FCB6FCF90CC3237505534766A9773DEBBFC25075702E16F54E22B13`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-2.0.0-mac-x64.zip)** — SHA-256 `ADBC85B7C6CEB8C90B43A6C29F77255BC1BF25D2031E1C43F25171F13985A071`
 
 On Windows, run the installer or extract the portable ZIP. On macOS, extract the ZIP, drag the app into **Applications**, then open it. After launch, open **Settings**, enter your own provider details, and run **Runtime Diagnostics**.
 
@@ -69,6 +69,18 @@ Formal proof work has two separate questions: whether Lean accepted a particular
 
 Frozen bindings are main-process records. The renderer cannot save or delete them through the general record API. This protects the provenance chain against accidental UI/model substitutions; it is not a solution to the general semantic-equivalence problem.
 
+## 2.0 discovery and formal-search loop
+
+Version 2.0 turns finite discovery into a first-class research stage rather than a separate laboratory. A model may propose a **data-only** candidate representation and evaluator during formalization; the app validates its schema, static bounds, small case, and adversarial input before any search starts. A valid specification enters `DISCOVERY_SEARCH`, produces deterministic archive entries and evaluator certificates, then flows through `DISCOVERY_ANALYZE`, lemma generation, formal proof search, critique, and replanning. Invalid specifications are retained as audited failures and cannot start workers.
+
+Candidate representations include sets/subsets, tuples, sequences, permutations, matrices, graphs, hypergraphs, integer vectors, boolean vectors, structured objects, and a deliberately non-executable expression-tree DSL. Evaluators are declarative and versioned: they support cardinality, bounds, all-different, forbidden tuple/hyperedge, coverage, no-three-in-line grid, and expression-size constraints; objectives can be minimized, maximized, targeted, Pareto-ranked, lexicographically ordered, or weighted. There is no `eval`, arbitrary Python, shell, URL, process, filesystem, or network execution in this evaluator path.
+
+Each run records the representation/evaluator hashes, seed, strategy, generation, candidate values, objective and constraint results, archive membership, and certificate hashes. Evolutionary, random, hill-climbing, beam, and annealing strategies are bounded by a persisted resource ledger; cancellation and restart retain a resumable checkpoint. Candidate success is computation-scoped evidence, never a theorem by itself.
+
+Formal proof search is likewise bounded. It only runs against a pre-existing frozen Formal Binding, probes the actual Lean compiler goal context, validates model-proposed tactics against a restrictive grammar, compiles candidates independently, records unsuccessful/partial states, and lets only successful Lean kernel runs certify the same frozen declaration. `AI_PROPOSED` mappings remain **Lean-statement-only**; only the established user-confirmation flow may claim original-language mapping scope.
+
+The research knowledge base stores attributed theorem/lemma/definition/construction/technique/certificate/failed-proof-state records across projects. Retrieval returns original verification labels rather than turning prior notes into facts. The built-in fixed benchmark has four levels; Level 4 validates the N71 representation but intentionally never reports an open problem solved merely because a representation or bounded run exists.
+
 ## Features
 
 - Chinese-first UI with an English language option.
@@ -83,7 +95,9 @@ Frozen bindings are main-process records. The renderer cannot save or delete the
 - OpenAI-compatible `/chat/completions` transport with bounded retries, SSE normalization, tool-call handling, reasoning-content compatibility, and structured-JSON recovery.
 - Local Markdown/LaTeX report export and JSON counterexample evidence export.
 - Restart recovery that converts interrupted runs to a resumable paused checkpoint.
-- **Construction Discovery Engine:** schema-checked finite construction input; deterministic candidate population; mutation, recombination, nondominated Pareto fronts, novelty scoring, and a bounded archive; a 1–32 worker-thread evaluator pool; per-generation SQLite checkpoints; pause/resume/restart recovery. A run is bounded to one million candidate evaluations.
+- **Discovery Engine 2.0:** validated data-only representation/evaluator DSL, deterministic candidate certificates, Pareto/lexicographic/weighted objectives, five bounded strategies, persistent budget ledger, checkpoint/recovery, orchestration-stage integration, and 71×71-capable finite-universe representation.
+- **Formal Proof Search:** a frozen-binding-only, kernel-checked Lean tactic search that records failed/partial states without mislabelling them as proofs.
+- **Research knowledge and benchmarks:** attributed cross-project records plus fixed Level 1–4 benchmark metrics, including `falseVerifiedRate`.
 
 The [changelog](CHANGELOG.md) records the implemented release history. Roadmap ideas are not presented as shipped features.
 
@@ -95,7 +109,8 @@ React + TypeScript renderer
 Electron main process
         ├── SQLite project and checkpoint store
         ├── research orchestrator and provider adapter
-        ├── finite-construction discovery engine → bounded Node worker-thread evaluator pool
+        ├── declarative discovery/evaluator engine → certificates, archive, budget ledger
+        ├── frozen-binding Lean proof search → kernel checker and failed-state archive
         ├── safeStorage credential wrapper
         ├── isolated Python worker → SymPy / NumPy / SciPy / Z3
         └── audited Lean 4 / Lake adapter → kernel acceptance
@@ -146,8 +161,9 @@ Never commit credentials. This project is not an official client for any model p
 ## Research workflow
 
 ```text
-Conjecture → Formalize → Plan → Explore → Experiment → Pattern/Lemma
-          → Proof attempt → Critique → Symbolic/Formal checks
+Conjecture → Formalize → Plan → Explore → Discovery search/analyze/refine or experiment
+          → Pattern/Lemma → frozen-binding proof search → proof attempt/critique
+          → Symbolic/Formal checks → synthesize → replan/checkpoint
           → Synthesize → Replan or Checkpoint → Resume/Complete
 ```
 
@@ -222,8 +238,8 @@ Provider E2E uses a local mock HTTP server. Tests against a real paid provider a
 - Imported documents use local text extraction and deterministic chunk retrieval, not OCR, embeddings, or a citation-grade semantic search engine.
 - The restricted Python worker is not an OS-level sandbox.
 - Provider compatibility varies, and model output can remain malformed or mathematically wrong after bounded recovery.
-- The Discovery Engine is a finite, fixed-objective search substrate. It does not yet ask an LLM to invent construction encodings, execute arbitrary evaluators, coordinate a distributed cluster, or maintain a cross-project theorem/lemma database.
-- Lean is currently an audited kernel verifier, not an interactive proof-state/tactic beam-search engine. A successful Lean theorem remains distinct from semantic equivalence to the original natural-language question unless the mapping is user-confirmed.
+- Discovery remains bounded to the configured local machine budget; it is not a distributed research cluster. Generated specifications are rejected rather than repaired if their semantics cannot be safely represented by the declarative DSL.
+- Formal proof search is a bounded tactic-search layer over Lean compilation, not a full Lean LSP environment or a semantic-equivalence oracle. A successful Lean theorem remains distinct from the original natural-language question unless the mapping is user-confirmed.
 - The Windows installer has no configured public code-signing identity; the macOS applications are not Developer-ID signed or notarized.
 - The macOS packages are statically and structurally validated, not dynamically tested on physical Apple Silicon and Intel Macs for this release.
 

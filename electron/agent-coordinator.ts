@@ -8,6 +8,7 @@ import { StressEngine } from './stress-engine';
 import type { ToolRunner } from './tool-runner';
 import type { LiteratureSearchService } from './literature-search';
 import { FormalBindingService } from './formal-binding';
+import { ResourceBudgetService } from './resource-budget';
 
 export class AgentCoordinator {
   private readonly runs = new Map<string, { controller: AbortController; promise: Promise<void> }>();
@@ -95,6 +96,8 @@ export class AgentCoordinator {
     const result: ToolResult = bindingCheck.ok
       ? await this.tools.run(invocation)
       : { ok: false, success: false, output: '', stdout: '', stderr: '', error: bindingCheck.error, errorType: 'VALIDATION_ERROR', exitCode: null, durationMs: 0, timeout: false, verificationStatus: 'PROGRAM_FAILURE' };
+    try { new ResourceBudgetService(this.db).consume(invocation.projectId, 'toolSeconds', Math.ceil(result.durationMs / 1_000)); }
+    catch (error) { result.ok = false; result.success = false; result.error = error instanceof Error ? error.message : 'RESOURCE_BUDGET_EXCEEDED'; result.errorType = 'VALIDATION_ERROR'; result.verificationStatus = 'PROGRAM_FAILURE'; }
     if (result.ok && invocation.name === 'lean_check' && bindingId) new FormalBindingService(this.db).certify(invocation.projectId, bindingId, String(invocation.input.code ?? ''), result.output || result.stdout);
     const detail = result.ok
       ? `VERIFIED: exit ${result.exitCode ?? 0}; stdout ${(result.stdout ?? '').slice(0, 1_000) || '(empty)'}${result.stderr ? `; stderr ${result.stderr.slice(0, 1_000)}` : ''}`

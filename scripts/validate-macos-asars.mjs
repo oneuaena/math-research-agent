@@ -3,7 +3,8 @@ import { join, resolve } from 'node:path';
 
 const root = resolve(import.meta.dirname, '..');
 for (const arch of ['arm64', 'x64']) {
-  const archive = join(root, 'release', 'mac-asars', arch, 'app.asar');
+  const releaseDirectory = process.env.MRA_RELEASE_DIR ? resolve(process.env.MRA_RELEASE_DIR) : join(root, 'release');
+  const archive = join(releaseDirectory, 'mac-asars', arch, 'app.asar');
   const runtime = extractFile(archive, 'dist-electron\\electron\\python-runtime.js').toString('utf8');
   const native = `node_modules\\@napi-rs\\canvas-darwin-${arch}\\skia.darwin-${arch}.node`;
   if (!runtime.includes("platform === 'darwin'") || !runtime.includes("'python3.12'")) {

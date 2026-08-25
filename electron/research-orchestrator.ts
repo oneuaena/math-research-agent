@@ -10,6 +10,11 @@ import type { ModelProvider } from './provider';
 import type { ToolRunner } from './tool-runner';
 import type { LiteratureSearchService } from './literature-search';
 import { FormalBindingService } from './formal-binding';
+import { DiscoveryEngine } from './discovery-engine';
+import { makeDiscoverySpecification } from './discovery-core';
+import { FormalProofSearchEngine } from './formal-proof-search';
+import { ResearchKnowledgeBase } from './research-knowledge-base';
+import { ResourceBudgetService } from './resource-budget';
 
 export interface ResearchRunOptions {
   resumeRequested?: boolean;
@@ -79,6 +84,7 @@ export class ResearchOrchestrator {
         if (stage === 'CHECKPOINT') session.checkpointCount += 1;
         let nextStage = chooseNextStage(stage, {
           hasSpecification: snapshot.specifications.length > 0,
+          hasDiscoverySpecification: this.db.listRecords<{ validation?: { schemaValid?: boolean; staticValid?: boolean; smallCaseValid?: boolean; adversarialValid?: boolean } }>(projectId, 'discoverySpecifications').some((item) => Boolean(item.validation?.schemaValid && item.validation?.staticValid && item.validation?.smallCaseValid && item.validation?.adversarialValid)),
           executable: Boolean(snapshot.specifications.at(-1)?.executable),
           sourceCount: snapshot.sources.length,
           proofHasGaps: !proof || proof.steps.some((step) => step.critical && step.status !== 'VALID'),
@@ -168,7 +174,9 @@ export class ResearchOrchestrator {
     if (stage === 'FORMALIZE') {
       const payload = await this.provider.formalize(snapshot, signal);
       const createdAt = now();
-      const specification: StructuredSpecification = { id: randomUUID(), projectId: snapshot.project.id, originalText: snapshot.project.question, ...payload, provider: this.db.getSettings().provider, createdAt, updatedAt: createdAt };
+      const { discoverySpecification: proposedDiscovery, ...formalPayload } = payload;
+      const discoverySpecification = proposedDiscovery ? makeDiscoverySpecification(snapshot.project.id, proposedDiscovery) : null;
+      const specification: StructuredSpecification = { id: randomUUID(), projectId: snapshot.project.id, originalText: snapshot.project.question, ...formalPayload, discoverySpecification, provider: this.db.getSettings().provider, createdAt, updatedAt: createdAt };
       const action: RoleAction = {
         title: 'Structured mathematical specification',
         summary: specification.executable ? 'A machine-executable interpretation was validated and retained with its uncertainty.' : specification.symbolicExpressions.length ? 'A symbolic specification was validated; no unsafe executable interpretation was invented.' : 'A natural-language specification was validated. Research continues without an executable interpretation.',
@@ -177,6 +185,41 @@ export class ResearchOrchestrator {
       };
       return { action, specification };
     }
+    if (stage === 'DISCOVERY_SEARCH') {
+      const specification = this.db.listRecords(snapshot.project.id, 'discoverySpecifications').at(-1);
+      if (!specification) throw new Error('DISCOVERY_SPEC_INVALID: no validated discovery specification is available.');
+      const run = await new DiscoveryEngine(this.db).startSpecification(snapshot.project.id, specification, {
+        populationSize: 32, generations: 12, workerCount: Math.min(4, this.db.getSettings().maxBranches), seed: 71,
+        mutationRate: .18, archiveLimit: 64, strategy: 'evolutionary', evaluationBudget: 384, checkpointEvery: 1,
+      }, signal);
+      const best = run.archive.at(0);
+      return {
+        specification: null,
+        action: {
+          title: `Discovery run ${run.status.toLowerCase()}`,
+          summary: run.status === 'COMPLETED' ? `Evaluated ${run.totalEvaluated} candidates with evaluator ${run.specification?.evaluatorHash}.` : `Discovery did not complete: ${run.error}`,
+          rationaleSummary: 'A versioned declarative evaluator ran a deterministic bounded search and persisted candidate certificates.',
+          evidence: [{ title: `Discovery evaluator ${run.specification?.evaluatorHash ?? ''}`, content: JSON.stringify({ runId: run.id, status: run.status, totalEvaluated: run.totalEvaluated, best }), type: 'discovery-search', verificationStatus: run.status === 'COMPLETED' ? 'computationally-verified' : 'unverified', reproducible: run.status === 'COMPLETED' }],
+          proposedNodes: best ? [{ kind: 'CLAIM', title: 'Top discovery candidate', statement: JSON.stringify({ candidate: best.value, objectiveValues: best.objectiveValues, constraintResults: best.constraintResults }), status: best.violations === 0 ? 'SUPPORTED' : 'UNKNOWN' }] : [],
+          branches: [], proofSteps: [], proofReviews: [], toolCalls: [], nextStage: 'DISCOVERY_ANALYZE', failures: run.status === 'COMPLETED' ? [] : [run.error || 'DISCOVERY_RUN_FAILED'], tokenUsage: { input: 0, output: 0, total: 0 },
+        },
+      };
+    }
+    if (stage === 'PROOF_SEARCH') {
+      const proposal = await this.provider.runRole({ stage, role: 'proof-builder', snapshot, branch, sourceContext: this.db.searchDocumentChunks(snapshot.project.id, snapshot.project.question, 6) }, signal);
+      const binding = snapshot.formalBindings.filter((item) => item.status === 'FROZEN' || item.status === 'KERNEL_CERTIFIED').at(-1);
+      if (!binding) return { specification: null, action: { ...proposal, title: 'Formal proof search unavailable', summary: 'No frozen formal binding exists, so proof search was not allowed to run.', rationaleSummary: 'The formal-binding gate prevents a proof of an unrelated Lean theorem from being attached to the original claim.', nextStage: 'PROOF_ATTEMPT', failures: [...proposal.failures, 'FORMAL_BINDING_REQUIRED'], formalTactics: [] } };
+      if (binding.status === 'KERNEL_CERTIFIED') return { specification: null, action: { ...proposal, title: 'Existing Lean certificate retained', summary: 'The current frozen declaration already has a recorded Lean kernel certificate; no redundant proof search was started.', rationaleSummary: 'Search retries are reserved for unresolved frozen declarations so long-running sessions do not repeatedly consume formal-tool budget.', nextStage: 'PROOF_ATTEMPT', formalTactics: proposal.formalTactics ?? [] } };
+      const proofSearch = await new FormalProofSearchEngine(this.db, this.tools).run(snapshot.project.id, binding.id, proposal.formalTactics ?? [], 32, signal);
+      const proofEvidence = {
+        title: `Lean proof search ${proofSearch.status.toLowerCase()}`,
+        content: JSON.stringify({ runId: proofSearch.id, bindingId: binding.id, goalState: proofSearch.goalState, attempts: proofSearch.attemptedTactics, kernelCertified: proofSearch.status === 'COMPLETED' }),
+        type: 'proof-search' as const,
+        verificationStatus: proofSearch.status === 'COMPLETED' ? 'formally-verified' as const : 'unverified' as const,
+        reproducible: proofSearch.status === 'COMPLETED',
+      };
+      return { specification: null, action: { ...proposal, title: `Formal proof search ${proofSearch.status.toLowerCase()}`, summary: proofSearch.status === 'COMPLETED' ? 'A frozen Lean declaration was accepted by the Lean kernel.' : 'No candidate tactic closed the frozen Lean declaration; failed states were retained for lemma search.', rationaleSummary: 'Each tactic proposal was restricted, independently compiled, and bound to the frozen declaration.', evidence: [...proposal.evidence, proofEvidence], nextStage: 'PROOF_ATTEMPT', failures: proofSearch.status === 'COMPLETED' ? proposal.failures : [...proposal.failures, proofSearch.error], formalTactics: proposal.formalTactics ?? [] } };
+    }
     let currentSnapshot = snapshot;
     if (stage === 'LITERATURE' && this.literature && this.db.getSettings().literatureSearchMode === 'auto') {
       await this.literature.search(snapshot.project.id, [snapshot.project.question, snapshot.project.goal, branch?.objective ?? ''].filter(Boolean).join(' '), signal);
@@ -184,14 +227,15 @@ export class ResearchOrchestrator {
     }
     const sourceQuery = [currentSnapshot.project.question, currentSnapshot.project.goal, branch?.objective ?? '', stage].join('\n');
     const sourceContext = this.db.searchDocumentChunks(currentSnapshot.project.id, sourceQuery, 8);
+    const knowledgeContext = new ResearchKnowledgeBase(this.db).retrieve(sourceQuery, 8).map((record) => ({ title: record.title, content: record.content, kind: record.kind, verificationStatus: record.verificationStatus }));
     if (stage === 'PROOF_CRITIQUE') {
       const [skeptic, verifier] = await Promise.all([
-        this.provider.runRole({ stage, role: 'skeptic', snapshot: currentSnapshot, branch, sourceContext }, signal),
-        this.provider.runRole({ stage, role: 'independent-verifier', snapshot: currentSnapshot, branch, sourceContext }, signal),
+        this.provider.runRole({ stage, role: 'skeptic', snapshot: currentSnapshot, branch, sourceContext, knowledgeContext }, signal),
+        this.provider.runRole({ stage, role: 'independent-verifier', snapshot: currentSnapshot, branch, sourceContext, knowledgeContext }, signal),
       ]);
       return { action: mergeIndependentReviews(skeptic, verifier), specification: null };
     }
-    const action = await this.provider.runRole({ stage, role: STAGE_ROLE[stage] ?? 'research-synthesizer', snapshot: currentSnapshot, branch, sourceContext }, signal);
+    const action = await this.provider.runRole({ stage, role: STAGE_ROLE[stage] ?? 'research-synthesizer', snapshot: currentSnapshot, branch, sourceContext, knowledgeContext }, signal);
     return { action, specification: null };
   }
 
@@ -207,12 +251,19 @@ export class ResearchOrchestrator {
       } else {
         action.failures.push('FORMAL_BINDING_NOT_FROZEN: FORMALIZE did not provide a Lean declaration; Lean checks are disabled for this specification.');
       }
+      if (specification.discoverySpecification) this.db.saveRecord('discoverySpecifications', specification.discoverySpecification);
+    }
+    if (action.discoverySpecification) {
+      const discoverySpecification = makeDiscoverySpecification(projectId, action.discoverySpecification);
+      this.db.saveRecord('discoverySpecifications', discoverySpecification);
+      if (!discoverySpecification.validation.schemaValid || !discoverySpecification.validation.staticValid || !discoverySpecification.validation.smallCaseValid || !discoverySpecification.validation.adversarialValid) action.failures.push(`DISCOVERY_SPEC_INVALID: ${discoverySpecification.validation.errors.join(' ')}`);
     }
     const evidenceIds: string[] = [];
     const toolCallIds: string[] = [];
     for (const proposal of action.evidence) {
       const evidence: ResearchEvidence = { id: randomUUID(), projectId, sessionId: session.id, branchId: branch?.id ?? null, ...proposal, sourceIds: [], experimentIds: [], createdAt: now() };
       this.db.saveRecord('evidence', evidence); evidenceIds.push(evidence.id);
+      new ResearchKnowledgeBase(this.db).index(projectId, { kind: evidence.type === 'proof-search' ? 'TECHNIQUE' : evidence.type === 'discovery-search' ? 'CERTIFICATE' : 'TECHNIQUE', title: evidence.title, content: evidence.content, relatedIds: [evidence.id], verificationStatus: evidence.verificationStatus });
     }
     if ((stage === 'PLAN' || stage === 'REPLAN') && action.branches.length) this.persistBranches(projectId, session, branch, action);
     this.persistNodes(projectId, branch, action, evidenceIds);
@@ -335,6 +386,8 @@ export class ResearchOrchestrator {
     } else {
       result = await this.tools.run(invocation);
     }
+    try { new ResourceBudgetService(this.db).consume(invocation.projectId, 'toolSeconds', Math.ceil(result.durationMs / 1_000)); }
+    catch (error) { result = { ...result, ok: false, success: false, error: error instanceof Error ? error.message : 'RESOURCE_BUDGET_EXCEEDED', errorType: 'VALIDATION_ERROR', verificationStatus: 'PROGRAM_FAILURE' }; }
     if (result.ok && bindingId) new FormalBindingService(this.db).certify(invocation.projectId, bindingId, String(invocation.input.code ?? ''), result.output || result.stdout);
     const detail = result.ok
       ? `VERIFIED: exit ${result.exitCode ?? 0}; stdout ${(result.stdout ?? '').slice(0, 1_000) || '(empty)'}${result.stderr ? `; stderr ${result.stderr.slice(0, 1_000)}` : ''}`

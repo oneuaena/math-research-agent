@@ -18,7 +18,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = ROOT / "runtime" / "cache" / "macos"
-RELEASE = ROOT / "release"
+RELEASE = Path(os.environ.get("MRA_RELEASE_DIR", ROOT / "release"))
 APP_NAME = "Math Research Agent"
 VERSION = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))["version"]
 ELECTRON_VERSION = "43.3.0"

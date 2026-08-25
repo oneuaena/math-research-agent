@@ -39,6 +39,10 @@ export const STAGE_LABELS: Record<AgentStage, string> = {
   VERIFY: 'Verifying dependencies',
   CRITIQUE: 'Testing logical weak points',
   REFINE: 'Refining the surviving route',
+  DISCOVERY_SEARCH: 'Running bounded candidate discovery',
+  DISCOVERY_ANALYZE: 'Analyzing candidate certificates',
+  DISCOVERY_REFINE: 'Refining the discovery specification',
+  PROOF_SEARCH: 'Searching formal proof states',
   SYNTHESIZE: 'Synthesizing research record',
   COMPLETE: 'Research run complete',
 };

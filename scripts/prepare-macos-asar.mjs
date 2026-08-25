@@ -9,7 +9,8 @@ const arch = process.argv[process.argv.indexOf('--arch') + 1];
 if (!['arm64', 'x64'].includes(arch)) throw new Error('Use --arch arm64 or --arch x64.');
 
 const workRoot = resolve(root, 'work');
-const releaseRoot = resolve(root, 'release', 'mac-asars');
+const releaseDirectory = process.env.MRA_RELEASE_DIR ? resolve(process.env.MRA_RELEASE_DIR) : resolve(root, 'release');
+const releaseRoot = resolve(releaseDirectory, 'mac-asars');
 const staging = resolve(workRoot, `macos-asar-${arch}`);
 const canvasStaging = resolve(workRoot, `macos-canvas-${arch}`);
 const outputRoot = resolve(releaseRoot, arch);
@@ -20,7 +21,7 @@ for (const path of [staging, canvasStaging, outputRoot]) {
   mkdirSync(path, { recursive: true });
 }
 
-const sourceAsar = join(root, 'release', 'win-unpacked', 'resources', 'app.asar');
+const sourceAsar = join(releaseDirectory, 'win-unpacked', 'resources', 'app.asar');
 const canvasArchive = join(root, 'runtime', 'cache', 'macos', `napi-rs-canvas-darwin-${arch}-0.1.80.tgz`);
 if (!existsSync(sourceAsar) || !existsSync(canvasArchive)) throw new Error('Required app.asar or Canvas archive is missing.');
 

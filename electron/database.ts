@@ -20,6 +20,7 @@ const COLLECTIONS: CollectionName[] = [
   'blocks', 'nodes', 'propositions', 'experiments', 'memories', 'failedAttempts', 'sources', 'attacks', 'stressResults',
   'specifications', 'sessions', 'researchSteps', 'branches', 'evidence', 'graphEdges', 'proofs',
   'conversations', 'messages', 'literature', 'noveltyChecks', 'formalBindings', 'discoveryRuns',
+  'discoverySpecifications', 'resourceBudgets', 'knowledgeRecords', 'formalProofSearchRuns', 'benchmarkRuns',
 ];
 
 const DEFAULT_SETTINGS: ProviderSettings = {
@@ -196,6 +197,14 @@ export class ResearchDatabase {
         COMMIT;
       `);
     }
+    if (current < 6) {
+      this.db.exec(`
+        BEGIN;
+        CREATE INDEX IF NOT EXISTS records_collection_project_updated ON records(collection, project_id, updated_at DESC);
+        INSERT INTO schema_migrations(version, applied_at) VALUES (6, datetime('now'));
+        COMMIT;
+      `);
+    }
   }
 
   private rowToProject(row: ProjectRow): Project {
@@ -259,6 +268,10 @@ export class ResearchDatabase {
       attacks: this.getRecords(id, 'attacks'),
       stressResults: this.getRecords(id, 'stressResults'),
       discoveryRuns: this.getRecords(id, 'discoveryRuns'),
+      discoverySpecifications: this.getRecords(id, 'discoverySpecifications'),
+      resourceBudgets: this.getRecords(id, 'resourceBudgets'),
+      knowledgeRecords: this.getRecords(id, 'knowledgeRecords'),
+      formalProofSearchRuns: this.getRecords(id, 'formalProofSearchRuns'),
       specifications: this.getRecords(id, 'specifications'),
       formalBindings: this.getRecords(id, 'formalBindings'),
       sessions: this.getRecords(id, 'sessions'),
@@ -423,6 +436,11 @@ export class ResearchDatabase {
   private getRecords<T>(projectId: string, collection: CollectionName): T[] {
     const rows = this.db.prepare('SELECT payload FROM records WHERE project_id = ? AND collection = ? ORDER BY created_at ASC').all(projectId, collection) as unknown as { payload: string }[];
     return rows.map((row) => JSON.parse(row.payload) as T);
+  }
+
+  /** Read-only typed access for cross-cutting services without exposing SQLite. */
+  listRecords<T>(projectId: string, collection: CollectionName): T[] {
+    return this.getRecords<T>(projectId, collection);
   }
 
   addActivity(activity: Activity): void {

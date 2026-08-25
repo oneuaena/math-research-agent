@@ -35,6 +35,9 @@ const api: DesktopApi = {
     resume: (projectId, runId) => ipcRenderer.invoke('discovery:resume', projectId, runId),
     stop: (projectId) => ipcRenderer.invoke('discovery:stop', projectId),
   },
+  benchmarks: {
+    run: (projectId) => ipcRenderer.invoke('benchmarks:run', projectId),
+  },
   documents: {
     import: (projectId: string) => ipcRenderer.invoke('documents:import', projectId),
     importPaths: (projectId: string, paths: string[]) => ipcRenderer.invoke('documents:import-paths', projectId, paths),

@@ -10,13 +10,13 @@ export type AgentStage =
   | 'PARSE' | 'PLAN_ATTACKS' | 'SMALL_CASES' | 'BOUNDARY' | 'SYMBOLIC' | 'EXTREMAL'
   | 'VERIFY_CANDIDATE' | 'EXPAND' | 'SUMMARIZE'
   | 'UNDERSTAND' | 'PLAN' | 'EXPLORE' | 'EXPERIMENT' | 'VERIFY' | 'CRITIQUE' | 'REFINE' | 'SYNTHESIZE'
-  | 'COMPLETE';
+  | 'DISCOVERY_SEARCH' | 'DISCOVERY_ANALYZE' | 'DISCOVERY_REFINE' | 'PROOF_SEARCH' | 'COMPLETE';
 
 export type NodeKind = 'Question' | 'Conjecture' | 'Attack' | 'Experiment' | 'Candidate' | 'Counterexample' | 'Open Region' | 'No Counterexample' | 'Lemma' | 'Definition' | 'Evidence' | 'Proof' | 'Failed Attempt' | 'Reference' | 'Open Problem'
   | 'CONJECTURE' | 'SUBGOAL' | 'LEMMA' | 'CLAIM' | 'EXPERIMENT' | 'COUNTEREXAMPLE' | 'PROOF_ATTEMPT'
   | 'PROOF_GAP' | 'IDENTITY' | 'PARAMETRIC_FAMILY' | 'LITERATURE_RESULT' | 'VERIFICATION' | 'DEAD_END';
 
-export type GraphEdgeKind = 'IMPLIES' | 'DEPENDS_ON' | 'SUPPORTS' | 'REFUTES' | 'GENERALIZES' | 'SPECIAL_CASE_OF' | 'USES' | 'BLOCKED_BY' | 'DERIVED_FROM';
+export type GraphEdgeKind = 'IMPLIES' | 'DEPENDS_ON' | 'SUPPORTS' | 'REFUTES' | 'GENERALIZES' | 'SPECIAL_CASE_OF' | 'SPECIALIZES' | 'USES' | 'BLOCKED_BY' | 'DERIVED_FROM' | 'VERIFIED_BY' | 'FOUND_BY' | 'FAILED_BECAUSE';
 export type ResearchRole = 'research-planner' | 'explorer' | 'experimental-mathematician' | 'lemma-generator' | 'proof-builder' | 'skeptic' | 'independent-verifier' | 'research-synthesizer';
 export type ProofStepStatus = 'VALID' | 'INVALID' | 'UNCERTAIN' | 'REQUIRES_LEMMA' | 'REQUIRES_COMPUTATION' | 'REQUIRES_FORMALIZATION';
 
@@ -103,6 +103,50 @@ export interface ExecutableSpecification {
   exactArithmetic: boolean;
 }
 
+export type CandidateRepresentationKind = 'SET' | 'SUBSET' | 'TUPLE' | 'SEQUENCE' | 'PERMUTATION' | 'MATRIX' | 'GRAPH' | 'HYPERGRAPH' | 'INTEGER_VECTOR' | 'BOOLEAN_VECTOR' | 'STRUCTURED_OBJECT' | 'PROGRAM';
+
+/** A closed, data-only candidate encoding. PROGRAM is an expression-tree DSL, never source code. */
+export interface CandidateRepresentation {
+  kind: CandidateRepresentationKind;
+  dimensions: Record<string, number | string | boolean>;
+  schemaVersion: 1;
+}
+
+export type EvaluatorConstraint =
+  | { kind: 'forbidden-tuples'; tuples: number[][]; arity: number }
+  | { kind: 'coverage-groups'; groups: number[][] }
+  | { kind: 'cardinality'; target: number }
+  | { kind: 'all-different' }
+  | { kind: 'bounds'; min: number; max: number }
+  | { kind: 'grid-no-three-in-line'; boardSize: number }
+  | { kind: 'expression-node-limit'; maxNodes: number };
+
+export type EvaluatorObjective = { name: string; direction: 'minimize' | 'maximize' | 'target'; metric: 'violations' | 'coverage' | 'spread' | 'novelty' | 'value'; target?: number };
+
+/** Declarative evaluator only. It is hashed and interpreted by the application, never eval'd. */
+export interface EvaluatorDefinition {
+  version: 1;
+  constraints: EvaluatorConstraint[];
+  objectives: EvaluatorObjective[];
+  aggregation: 'pareto' | 'lexicographic' | 'weighted';
+  weights?: Record<string, number>;
+}
+
+export interface DiscoverySpecification {
+  id: string;
+  projectId: string;
+  representation: CandidateRepresentation;
+  evaluator: EvaluatorDefinition;
+  origin: 'MODEL_PROPOSED' | 'USER_PROVIDED' | 'MIGRATED_LEGACY';
+  semanticScope: string;
+  validation: { schemaValid: boolean; staticValid: boolean; smallCaseValid: boolean; adversarialValid: boolean; errors: string[] };
+  evaluatorHash: string;
+  specificationHash: string;
+  createdAt: string;
+  updatedAt: string;
+}
+export type DiscoverySpecificationInput = Pick<DiscoverySpecification, 'representation' | 'evaluator' | 'semanticScope'>;
+
 export interface StructuredSpecification {
   id: string;
   projectId: string;
@@ -116,6 +160,7 @@ export interface StructuredSpecification {
   searchParameters: Record<string, string | number | boolean>;
   validationRules: string[];
   executable: ExecutableSpecification | null;
+  discoverySpecification?: DiscoverySpecification | null;
   symbolicExpressions: string[];
   /** A declaration header proposed during FORMALIZE, never a proof body. */
   leanStatement: string | null;
@@ -177,7 +222,7 @@ export interface ResearchEvidence {
   projectId: string;
   sessionId: string;
   branchId: string | null;
-  type: 'exact-computation' | 'symbolic-computation' | 'numerical-computation' | 'user-source' | 'model-analysis' | 'formal-check';
+  type: 'exact-computation' | 'symbolic-computation' | 'numerical-computation' | 'user-source' | 'model-analysis' | 'formal-check' | 'discovery-search' | 'evaluation-certificate' | 'proof-search';
   title: string;
   content: string;
   verificationStatus: VerificationStatus;
@@ -597,11 +642,23 @@ export interface DiscoveryConfig {
   seed: number;
   mutationRate: number;
   archiveLimit: number;
+  strategy?: 'evolutionary' | 'random' | 'hill-climbing' | 'beam' | 'annealing';
+  evaluationBudget?: number;
+  checkpointEvery?: number;
 }
 
 export interface DiscoveryCandidate {
   fingerprint: string;
+  /** Legacy subset view retained for imported 1.3.0 projects and the existing UI. */
   genes: number[];
+  value?: unknown;
+  representation?: CandidateRepresentation;
+  objectiveValues?: Record<string, number>;
+  constraintResults?: Array<{ kind: string; passed: boolean; value: number; detail: string }>;
+  evaluatorHash?: string;
+  parentFingerprints?: string[];
+  generation?: number;
+  strategy?: string;
   violations: number;
   coverage: number;
   spread: number;
@@ -620,6 +677,48 @@ export interface DiscoveryRun {
   population: number[][];
   archive: DiscoveryCandidate[];
   rngState: number;
+  startedAt: string;
+  updatedAt: string;
+  completedAt: string | null;
+  error: string;
+  specification?: DiscoverySpecification;
+  candidateCertificates?: Array<{ fingerprint: string; candidateHash: string; evaluatorHash: string; resultHash: string; createdAt: string }>;
+  failureCode?: 'DISCOVERY_SPEC_INVALID' | 'EVALUATOR_SANDBOX_VIOLATION' | 'RESOURCE_BUDGET_EXCEEDED' | 'WORKER_FAILURE' | 'CANCELLED' | 'UNKNOWN';
+}
+
+export interface ResourceBudgetRecord {
+  id: string;
+  projectId: string;
+  status: 'ACTIVE' | 'EXHAUSTED' | 'CANCELLED';
+  limits: { maxEvaluations: number; maxWorkers: number; maxProofAttempts: number; maxToolSeconds: number };
+  used: { evaluations: number; proofAttempts: number; toolSeconds: number };
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface KnowledgeRecord {
+  id: string;
+  projectId: string;
+  kind: 'THEOREM' | 'LEMMA' | 'DEFINITION' | 'CONSTRUCTION' | 'FAILED_PROOF_STATE' | 'TECHNIQUE' | 'EVALUATOR' | 'CERTIFICATE';
+  title: string;
+  content: string;
+  hashes: Record<string, string>;
+  relatedIds: string[];
+  verificationStatus: VerificationStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface FormalProofSearchRun {
+  id: string;
+  projectId: string;
+  bindingId: string;
+  status: 'RUNNING' | 'COMPLETED' | 'PAUSED' | 'FAILED';
+  goalState: string;
+  attemptedTactics: Array<{ script: string; status: 'FAILED' | 'PARTIAL' | 'VERIFIED'; output: string; remainingGoals: number }>;
+  beam: Array<{ script: string; remainingGoals: number; score: number }>;
+  totalAttempts: number;
+  maxAttempts: number;
   startedAt: string;
   updatedAt: string;
   completedAt: string | null;
@@ -650,6 +749,10 @@ export interface ProjectSnapshot {
   attacks: AttackRecord[];
   stressResults: StressTestResult[];
   discoveryRuns: DiscoveryRun[];
+  discoverySpecifications: DiscoverySpecification[];
+  resourceBudgets: ResourceBudgetRecord[];
+  knowledgeRecords: KnowledgeRecord[];
+  formalProofSearchRuns: FormalProofSearchRun[];
   specifications: StructuredSpecification[];
   formalBindings: FormalBinding[];
   sessions: ResearchSession[];
@@ -719,7 +822,7 @@ export interface CredentialStatus { configured: boolean; masked: string; secureS
 
 export type CollectionName = 'blocks' | 'nodes' | 'propositions' | 'experiments' | 'memories' | 'failedAttempts' | 'sources' | 'attacks' | 'stressResults'
   | 'specifications' | 'sessions' | 'researchSteps' | 'branches' | 'evidence' | 'graphEdges' | 'proofs'
-  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings' | 'discoveryRuns';
+  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings' | 'discoveryRuns' | 'discoverySpecifications' | 'resourceBudgets' | 'knowledgeRecords' | 'formalProofSearchRuns' | 'benchmarkRuns';
 
 export interface AgentEvent {
   projectId: string;
@@ -790,10 +893,11 @@ export interface DesktopApi {
     verify(projectId: string, bindingId: string, leanSource: string): Promise<FormalBindingValidation>;
   };
   discovery: {
-    start(projectId: string, input: { problem: DiscoveryProblem; config: DiscoveryConfig }): Promise<DiscoveryRun>;
+    start(projectId: string, input: { problem: DiscoveryProblem; config: DiscoveryConfig } | { specification: DiscoverySpecificationInput; config: DiscoveryConfig }): Promise<DiscoveryRun>;
     resume(projectId: string, runId: string): Promise<DiscoveryRun>;
     stop(projectId: string): Promise<DiscoveryRun | null>;
   };
+  benchmarks: { run(projectId: string): Promise<unknown>; };
   documents: {
     import(projectId: string): Promise<ProjectSnapshot | null>;
     importPaths(projectId: string, paths: string[]): Promise<ProjectSnapshot>;

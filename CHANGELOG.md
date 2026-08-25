@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.0.0] - 2026-08-25
+
+### Discovery and research loop
+
+- Replaced the fixed subset-only discovery core with a versioned, declarative Candidate Representation Layer: sets/subsets, tuples, sequences, permutations, matrices, graphs, hypergraphs, integer/boolean vectors, structured objects, and a non-executable expression-tree program DSL.
+- Added hash-addressed `EvaluatorDefinition` records with declarative constraints/objectives, Pareto/lexicographic/weighted aggregation, candidate certificates, deterministic seeds, lineage fields, reproducible archive state, and five bounded strategies: evolutionary, random, hill-climbing, beam, and annealing.
+- Added schema, static, small-case, and adversarial evaluator validation before a search can start. The evaluator accepts data only; it does not evaluate Python, JavaScript, shell commands, URLs, or model-generated code.
+- Connected discovery to the autonomous loop: validated specifications enter `DISCOVERY_SEARCH`, persist evaluator-scoped evidence/certificates, proceed through `DISCOVERY_ANALYZE`, then feed lemma/proof stages and replanning.
+- Removed the legacy 4096-universe limit from the generic engine. The N71 representation (`71 × 71`, 142 selected points, no-three-in-line evaluator) is regression-tested as a representation and never labelled a solved open problem.
+
+### Formal work, memory, and measurement
+
+- Added bounded `FormalProofSearchEngine`: frozen-binding goal probing, restricted tactic proposal validation, independent Lean compilation, saved attempted/partial states, beam records, failed-state knowledge records, cancellation checkpoints, and kernel-only certification. It cannot replace the existing Formal Binding gate.
+- Added a persisted project resource ledger shared by generic discovery and formal proof attempts; limits produce explicit `RESOURCE_BUDGET_EXCEEDED` failures rather than silent truncation.
+- Added a structured, attributed cross-project research knowledge base for evaluator certificates, techniques, and failed proof states. Retrieval preserves original verification labels.
+- Added fixed Level 1–4 benchmark execution and stored metrics, including `falseVerifiedRate`. Level 4 validates the N71 representation only and is always reported inconclusive unless separately solved with appropriate evidence.
+- Added SQLite migration 6 and preserved existing project/record layouts. Legacy 1.2.x/1.3.x discovery runs remain readable; new data is additive.
+
+### Verification
+
+- Added regression coverage for every representation family, evaluator rejection, deterministic archive/certificate reproduction, N71 scale/schema, budget exhaustion, orchestration linkage, formal proof search binding scope, and benchmark truth labelling.
+
 ## [1.3.0] - 2026-08-25
 
 ### Added

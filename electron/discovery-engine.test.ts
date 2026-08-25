@@ -68,4 +68,16 @@ describe('DiscoveryEngine', () => {
     expect(() => DiscoveryEngine.parseInput({ ...input, problem: { ...input.problem, candidateSize: 19 } })).toThrow('Invalid discovery specification');
     expect(() => DiscoveryEngine.parseInput({ ...input, problem: { ...input.problem, incompatibilities: [[0, 18]] } })).toThrow('Invalid discovery specification');
   });
+
+  it('keeps an imported 1.3 legacy run readable and resumable after the additive migration', async () => {
+    const { database, projectId } = setup();
+    const controller = new AbortController(); controller.abort();
+    const paused = await new DiscoveryEngine(database).start(projectId, input, controller.signal);
+    database.saveRecord('discoveryRuns', {
+      ...paused, id: 'legacy-v130', error: 'Imported legacy checkpoint.',
+    });
+    const resumed = await new DiscoveryEngine(database).resume(projectId, 'legacy-v130');
+    expect(resumed.status).toBe('COMPLETED');
+    expect(resumed.specification).toBeUndefined();
+  });
 });

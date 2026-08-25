@@ -17,6 +17,7 @@ import { ResearchStateLog } from './research-state-log';
 import { ResearchJobManager } from './research-job-manager';
 import { ToolRunner } from './tool-runner';
 import { DiscoveryEngine } from './discovery-engine';
+import { BenchmarkRunner } from './benchmark-runner';
 
 let mainWindow: BrowserWindow | null = null;
 let database: ResearchDatabase;
@@ -139,11 +140,11 @@ function registerIpc(): void {
   ipcMain.handle('projects:update', (_event, id: string, patch: Partial<CreateProjectInput>) => database.updateProject(id, patch));
   ipcMain.handle('projects:remove', (_event, id: string) => database.removeProject(id));
   ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => {
-    if (collection === 'formalBindings' || collection === 'discoveryRuns') throw new Error('MAIN_PROCESS_RECORD_ONLY: use the dedicated main-process service.');
+    if (['formalBindings', 'discoveryRuns', 'discoverySpecifications', 'resourceBudgets', 'formalProofSearchRuns', 'benchmarkRuns'].includes(collection)) throw new Error('MAIN_PROCESS_RECORD_ONLY: use the dedicated main-process service.');
     return database.saveRecord(collection, record);
   });
   ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => {
-    if (collection === 'formalBindings' || collection === 'discoveryRuns') throw new Error('MAIN_PROCESS_RECORD_ONLY: this record cannot be deleted from the renderer.');
+    if (['formalBindings', 'discoveryRuns', 'discoverySpecifications', 'resourceBudgets', 'formalProofSearchRuns', 'benchmarkRuns'].includes(collection)) throw new Error('MAIN_PROCESS_RECORD_ONLY: this record cannot be deleted from the renderer.');
     return database.removeRecord(collection, id, projectId);
   });
   ipcMain.handle('formal-bindings:freeze-user-confirmed', (_event, projectId: string, originalStatement: string, formalIr: string, leanSource: string) => formalBindings.freezeUserConfirmed(projectId, originalStatement, formalIr, leanSource));
@@ -166,6 +167,7 @@ function registerIpc(): void {
     controller.abort();
     return database.getProject(projectId, false).discoveryRuns.find((run) => run.status === 'RUNNING') ?? null;
   });
+  ipcMain.handle('benchmarks:run', (event, projectId: string) => new BenchmarkRunner(database).run(projectId, event.sender.isDestroyed() ? undefined : new AbortController().signal));
 
   ipcMain.handle('agent:start', (_event, projectId: string) => jobs.start(projectId));
   ipcMain.handle('agent:resume', (_event, projectId: string) => jobs.resume(projectId));

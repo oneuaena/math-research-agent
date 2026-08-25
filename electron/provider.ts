@@ -27,6 +27,7 @@ export interface ProviderRoleRequest {
   snapshot: ProjectSnapshot;
   branch: ResearchBranch | null;
   sourceContext?: DocumentSearchResult[];
+  knowledgeContext?: Array<{ title: string; content: string; kind: string; verificationStatus: string }>;
 }
 
 export interface ModelProvider {
@@ -133,6 +134,8 @@ const roleActionContract = {
   branches: [],
   proofSteps: [],
   proofReviews: [],
+  formalTactics: [],
+  discoverySpecification: null,
   toolCalls: [],
   nextStage: 'FORMALIZE',
   failures: [],
@@ -140,12 +143,14 @@ const roleActionContract = {
 };
 
 const roleActionItemContract = {
-  evidence: { title: 'string', content: 'string', type: 'exact-computation|symbolic-computation|numerical-computation|user-source|model-analysis|formal-check', verificationStatus: 'exactly-verified|computationally-verified|symbolically-verified|numerically-supported|llm-assessed-only|unverified', reproducible: 'boolean' },
+  evidence: { title: 'string', content: 'string', type: 'exact-computation|symbolic-computation|numerical-computation|user-source|model-analysis|formal-check|discovery-search|evaluation-certificate|proof-search', verificationStatus: 'formally-verified|exactly-verified|computationally-verified|symbolically-verified|numerically-supported|llm-assessed-only|unverified', reproducible: 'boolean' },
   proposedNodes: { kind: 'SUBGOAL|LEMMA|CLAIM|IDENTITY|PARAMETRIC_FAMILY|PROOF_ATTEMPT|PROOF_GAP|DEAD_END', title: 'string', statement: 'string', status: 'UNEXPLORED|ACTIVE|SUPPORTED|PROVED_CONDITIONALLY|GAP|DEAD_END|UNKNOWN' },
   branches: { title: 'string', objective: 'string', method: 'string', priority: 'integer 1..100' },
   proofSteps: { title: 'string', statement: 'string', argument: 'string', dependencies: 'string[]', critical: 'boolean' },
   proofReviews: { stepId: 'string', status: 'VALID|INVALID|UNCERTAIN|REQUIRES_LEMMA|REQUIRES_COMPUTATION|REQUIRES_FORMALIZATION', comment: 'string' },
   toolCalls: { name: 'run_python|symbolic_simplify|solve_equation|differentiate|integrate|matrix_compute|z3_check|lean_check|workspace_write|workspace_read|download_file|run_command', purpose: 'string', input: 'object' },
+  formalTactics: 'optional string[]; tactics only, no imports, code, sorry, admit, or run_tac',
+  discoverySpecification: 'optional null or {representation:{kind,dimensions,schemaVersion:1}, evaluator:{version:1,constraints,objectives,aggregation,weights?},semanticScope}; declarative data only, never code',
 };
 
 const localTemplates: Partial<Record<AgentStage, (snapshot: ProjectSnapshot) => StageResult>> = {
@@ -237,14 +242,14 @@ export class LocalProvider implements ModelProvider {
       ], nextStage: 'EXPLORE',
     });
     if (request.stage === 'LITERATURE') return roleActionSchema.parse({ ...base, title: 'Imported-source review', summary: request.snapshot.sources.length ? `Reviewed ${request.snapshot.sources.length} imported source records. Only stored excerpts may be cited.` : 'No literature was imported. No citation was fabricated.', nextStage: 'EXPLORE' });
-    if (request.stage === 'EXPLORE') return roleActionSchema.parse({ ...base, title: branch?.title ?? 'Exploration', summary: `Explored ${branch?.objective ?? 'the target'}; all claims remain provisional until supported by reproducible evidence.`, proposedNodes: [{ kind: 'SUBGOAL', title: branch?.title ?? 'Clarify a subgoal', statement: branch?.objective ?? request.snapshot.project.goal, status: 'ACTIVE' }], nextStage: spec?.executable ? 'EXPERIMENT' : 'PATTERN_DISCOVERY' });
+    if (request.stage === 'EXPLORE') return roleActionSchema.parse({ ...base, title: branch?.title ?? 'Exploration', summary: `Explored ${branch?.objective ?? 'the target'}; all claims remain provisional until supported by reproducible evidence.`, proposedNodes: [{ kind: 'SUBGOAL', title: branch?.title ?? 'Clarify a subgoal', statement: branch?.objective ?? request.snapshot.project.goal, status: 'ACTIVE' }], nextStage: spec?.discoverySpecification ? 'DISCOVERY_SEARCH' : spec?.executable ? 'EXPERIMENT' : 'PATTERN_DISCOVERY' });
     if (request.stage === 'EXPERIMENT' || request.stage === 'COUNTEREXAMPLE_SEARCH') {
       const executable = spec?.executable;
       const code = executable ? buildExactSearchCode(executable) : '';
       return roleActionSchema.parse({ ...base, title: executable ? 'Exact finite search' : 'Experiment not safely executable', summary: executable ? `Run a reproducible exact search over ${executable.variable} in [${executable.range.min}, ${executable.range.max}].` : 'No safe executable specification is available. This does not stop the research loop.', toolCalls: executable ? [{ name: 'run_python', purpose: 'Run an exact finite search from the validated structured specification.', input: { code } }] : [], nextStage: request.stage === 'EXPERIMENT' ? 'COUNTEREXAMPLE_SEARCH' : 'PATTERN_DISCOVERY' });
     }
     if (request.stage === 'PATTERN_DISCOVERY') return roleActionSchema.parse({ ...base, title: 'Pattern candidates', summary: 'Candidate structure was recorded, but pattern observations are not proofs.', proposedNodes: [{ kind: 'CLAIM', title: 'Observed structural candidate', statement: `A potentially useful structure for: ${request.snapshot.project.question}`, status: 'UNKNOWN' }], nextStage: 'LEMMA_GENERATION' });
-    if (request.stage === 'LEMMA_GENERATION') return roleActionSchema.parse({ ...base, title: 'Candidate lemma', summary: 'A dependency-focused lemma was proposed for independent checking.', proposedNodes: [{ kind: 'LEMMA', title: 'Candidate bridge lemma', statement: `A sufficient intermediate statement for ${branch?.objective ?? 'the main target'}; exact hypotheses remain to be established.`, status: 'UNEXPLORED' }], nextStage: 'PROOF_ATTEMPT' });
+    if (request.stage === 'LEMMA_GENERATION') return roleActionSchema.parse({ ...base, title: 'Candidate lemma', summary: 'A dependency-focused lemma was proposed for independent checking.', proposedNodes: [{ kind: 'LEMMA', title: 'Candidate bridge lemma', statement: `A sufficient intermediate statement for ${branch?.objective ?? 'the main target'}; exact hypotheses remain to be established.`, status: 'UNEXPLORED' }], nextStage: 'PROOF_SEARCH' });
     if (request.stage === 'PROOF_ATTEMPT') return roleActionSchema.parse({ ...base, title: 'Structured proof attempt', summary: 'A draft proof skeleton was created. Model-generated steps start as UNCERTAIN.', proofSteps: [{ title: 'Normalize assumptions', statement: 'Restate the target with explicit domains and hypotheses.', argument: 'Use the validated structured specification as the boundary of the claim.', dependencies: [], critical: true }, { title: 'Bridge to target', statement: 'Apply the proposed intermediate structure to the target.', argument: 'This step requires independent justification and may require a separate lemma.', dependencies: [], critical: true }], nextStage: 'PROOF_CRITIQUE' });
     if (request.stage === 'PROOF_CRITIQUE') {
       const proof = request.snapshot.proofs.at(-1);
@@ -320,13 +325,14 @@ export class ResponsesProvider implements ModelProvider {
       searchParameters: { min: 0, max: 100, exactArithmetic: true },
       validationRules: ['do not treat finite survival as proof'],
       executable: null,
+      discoverySpecification: null,
       symbolicExpressions: ['n*(n+1)'],
       leanStatement: null,
       naturalLanguageOnly: false,
       uncertainty: ['unresolved ambiguity'],
       confidence: 0.5,
     };
-    const prompt = `Convert the mathematical research question into one JSON object matching this exact shape:\n${JSON.stringify(contract)}\nRules: quantifiers, assumptions, equivalentForms, validationRules, symbolicExpressions, and uncertainty must be arrays of strings; domains must be an object mapping variable names to string domains; every searchParameters value must be one string, number, or boolean, never an array or object; confidence must be a number from 0 to 1. executable must be null unless a safe interpretation exists; if present it must contain kind, variable, expression, predicate, range{min,max,sampleCount}, exactArithmetic. leanStatement must be null unless you can state the exact target as one proof-free Lean declaration header beginning theorem, lemma, or example and containing a colon; it must not contain imports, :=, where, tactics, or a proof body. This candidate is frozen before any Lean proof and is not an independently certified translation of the original language. Do not invent executable mathematics when ambiguous. Return JSON only. Question context:\n${JSON.stringify(snapshot.project)}`;
+    const prompt = `Convert the mathematical research question into one JSON object matching this exact shape:\n${JSON.stringify(contract)}\nRules: quantifiers, assumptions, equivalentForms, validationRules, symbolicExpressions, and uncertainty must be arrays of strings; domains must be an object mapping variable names to string domains; every searchParameters value must be one string, number, or boolean, never an array or object; confidence must be a number from 0 to 1. executable must be null unless a safe interpretation exists; if present it must contain kind, variable, expression, predicate, range{min,max,sampleCount}, exactArithmetic. discoverySpecification may be null; if present it must be a data-only finite candidate representation plus evaluator DSL, with no code, Python, shell command, URL, or executable expression. Its evaluator must include a violations objective and use only supported constraint kinds: forbidden-tuples, coverage-groups, cardinality, all-different, bounds, grid-no-three-in-line, expression-node-limit. leanStatement must be null unless you can state the exact target as one proof-free Lean declaration header beginning theorem, lemma, or example and containing a colon; it must not contain imports, :=, where, tactics, or a proof body. This candidate is frozen before any Lean proof and is not an independently certified translation of the original language. Do not invent executable mathematics when ambiguous. Return JSON only. Question context:\n${JSON.stringify(snapshot.project)}`;
     const first = await this.requestJson(prompt, signal);
     const parsed = formalizationSchema.safeParse(first);
     if (parsed.success) return parsed.data;
@@ -371,6 +377,7 @@ export class ResponsesProvider implements ModelProvider {
         doi: record.doi, url: record.url, arxivId: record.arxivId, abstract: record.abstract, provider: record.provider,
         verificationStatus: record.verificationStatus,
       })),
+      retrievedKnowledge: request.knowledgeContext?.map((record) => ({ ...record, content: record.content.slice(0, 4_000) })) ?? [],
     };
     const hasNativeTools = nativeToolStages.has(request.stage);
     const toolInstruction = hasNativeTools

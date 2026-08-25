@@ -12,13 +12,13 @@ Math Research Agent 是一款本地优先的 Electron 桌面应用，用于组�
 
 ### Windows 10/11 x64
 
-- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-Setup-1.3.0.exe)** — SHA-256 `A30B584C05B436FECCF256015AF0B52CB6F4364B78CE25BCEC253C6072094410`
-- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-Windows-Software.zip)** — SHA-256 `19F3A5FC63EDB46757F2F040CE95A0480C731A9A0AD78D695B942969298C5F1C`
+- **[安装包（.exe）](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-Setup-2.0.0.exe)** — SHA-256 `A2CCFFA89ED2F7A4D4D327E01924CB35CACE7A0CC5DE751BF03829522AA03284`
+- **[免安装软件 ZIP](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-2.0.0-Windows-Software.zip)** — SHA-256 `31EF9E5B32B434F6E8F2B4E2BB2CD8A93F233F9D91428226C65A1E2F2617C3E2`
 
 ### macOS 13 或更高版本
 
-- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-arm64.zip)** — SHA-256 `02AD3A7DA3B4EDC4A1DB79B1B8CA1B408021F27107F637FEE331DA134EA1FB42`
-- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v1.3.0/Math-Research-Agent-1.3.0-mac-x64.zip)** — SHA-256 `61DF7D7632204E7771E83714A0BABADAC36AF7083668C421B0BDDE7343D40796`
+- **[Apple Silicon（M1/M2/M3/M4/M5）](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-2.0.0-mac-arm64.zip)** — SHA-256 `12FC4ECB6FCB6FCF90CC3237505534766A9773DEBBFC25075702E16F54E22B13`
+- **[Intel Mac](https://github.com/oneuaena/math-research-agent/releases/download/v2.0.0/Math-Research-Agent-2.0.0-mac-x64.zip)** — SHA-256 `ADBC85B7C6CEB8C90B43A6C29F77255BC1BF25D2031E1C43F25171F13985A071`
 
 Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应用拖入“应用程序”目录再打开。启动后进入“设置”，填写自己的 Provider、Base URL、模型和 API Key，并运行“运行环境检查”。
 
@@ -69,6 +69,16 @@ Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应�
 
 冻结绑定是主进程记录；渲染进程不能通过通用记录接口保存或删除它们。这能防止 UI/模型意外替换溯源链，但不能自动解决一般性的语义等价问题。
 
+## 2.0：发现、证明搜索与证据闭环
+
+2.0 将有限构造发现接入了自主研究主循环。模型可以在形式化时提出**纯数据**的候选表示和 evaluator；主进程会先做 schema、静态边界、小规模和对抗性输入校验，只有通过的规格才会进入 `DISCOVERY_SEARCH`。搜索会保存 evaluator 哈希、seed、策略、候选、目标值、约束结果和证书，再进入 `DISCOVERY_ANALYZE`、引理、冻结绑定上的 Lean 证明搜索、批判和重规划。无效规格只留下失败审计记录，绝不会启动 evaluator。
+
+候选层支持集合/子集、元组、序列、排列、矩阵、图、超图、整数/布尔向量、结构化对象和非可执行表达式树 DSL。evaluator 同样是版本化声明式数据：基数、范围、互异、禁止元组/超边、覆盖、网格三点共线和表达式大小等约束，以及 Pareto、字典序和加权目标；其中没有 `eval`、任意 Python、shell、网络、文件或进程执行。
+
+形式证明搜索仅能对既有冻结 Formal Binding 运行：它记录 Lean 目标探测、受限 tactic 提案、独立编译、部分/失败状态和 beam；只有 Lean 内核接受同一个冻结声明才可认证。`AI_PROPOSED` 映射始终只是 `LEAN STATEMENT ONLY`，不能自动等同于原自然语言命题。跨项目知识库也只检索带来源与原验证等级的记录，不会把旧笔记升级成事实。
+
+内置固定 benchmark 分为 Level 1–4，保存解决率、形式证明率、评估调用数、耗时和 `falseVerifiedRate`。Level 4 的 N71 仅验证 `71 × 71`、142 点、无三点共线的表示/评估器能被安全表达；它不会把开放问题标为已解决。
+
 ## 已实现功能
 
 - 中文默认界面，可切换英文。
@@ -83,7 +93,9 @@ Windows 用户运行安装包或解压免安装 ZIP；Mac 用户解压后把应�
 - OpenAI-compatible `/chat/completions` 传输层，支持有限重试、SSE 归一化、工具调用、reasoning 字段兼容和结构化 JSON 恢复。
 - 本地导出 Markdown/LaTeX 报告和 JSON 反例证据。
 - 启动时把中断任务恢复为可继续的暂停 checkpoint。
-- **构造发现引擎：** schema 校验的有限构造输入、确定性候选种群、变异、重组、非支配 Pareto 前沿、新颖性评分和受限归档；1–32 个 worker 线程评估；逐代 SQLite checkpoint；支持暂停、恢复和重启恢复。单次运行最多评估一百万个候选。
+- **发现引擎 2.0：** 受验证的数据表示/evaluator DSL、确定性候选证书、Pareto/字典序/加权目标、进化/随机/爬山/beam/退火策略、预算账本、恢复 checkpoint，以及与自主研究阶段的闭环。
+- **Formal Proof Search：** 只针对冻结绑定的受限 Lean tactic 搜索；失败/部分状态被保存但绝不当作证明。
+- **研究知识与 benchmark：** 归因的跨项目记录、固定 Level 1–4 指标和 `falseVerifiedRate`。
 
 [CHANGELOG](CHANGELOG.md) 只记录真实实现；roadmap 想法不会写成已交付功能。
 

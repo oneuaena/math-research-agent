@@ -3,6 +3,9 @@ import { Worker } from 'node:worker_threads';
 import { z } from 'zod';
 import type { DiscoveryCandidate, DiscoveryConfig, DiscoveryProblem, DiscoveryRun } from '../src/shared/types';
 import type { ResearchDatabase } from './database';
+import { candidateValue, createCandidate, crossoverCandidate, digest, evaluateCandidate, makeDiscoverySpecification, mutateCandidate, representationUniverse } from './discovery-core';
+import type { DiscoverySpecification } from '../src/shared/types';
+import { ResourceBudgetService } from './resource-budget';
 
 const integer = z.number().int();
 const problemSchema = z.object({
@@ -25,6 +28,9 @@ const configSchema = z.object({
   seed: integer.min(1).max(2_147_483_646),
   mutationRate: z.number().min(0.01).max(1),
   archiveLimit: integer.min(8).max(256),
+  strategy: z.enum(['evolutionary', 'random', 'hill-climbing', 'beam', 'annealing']).optional(),
+  evaluationBudget: integer.min(1).max(1_000_000).optional(),
+  checkpointEvery: integer.min(1).max(10_000).optional(),
 }).superRefine((value, context) => {
   if (value.populationSize * value.generations > 1_000_000) context.addIssue({ code: 'custom', message: 'populationSize × generations cannot exceed 1,000,000 evaluations per run.' });
 });
@@ -44,6 +50,19 @@ function evaluate(genes, problem) {
 parentPort.postMessage(workerData.population.map((genes) => evaluate(genes, workerData.problem)));
 `;
 
+// This is application-authored interpreter code executed in a short-lived
+// worker. Worker data is strictly declarative representation/evaluator JSON.
+const genericEvaluatorSource = `
+const { parentPort, workerData } = require('node:worker_threads');
+function dim(r,n,f=0){const v=r.dimensions[n];return Number.isInteger(v)?v:f}
+function comb(n,k){if(k>n||k<0)return 0;let x=1;for(let i=1;i<=k;i++)x=x*(n-k+i)/i;return Math.min(Math.round(x),1000000)}
+function universe(r){if(r.kind==='MATRIX')return Math.max(1,dim(r,'rows')*dim(r,'columns'));if(r.kind==='GRAPH'){const n=dim(r,'vertexCount');return Math.max(1,n*(n-1)/2)}if(r.kind==='HYPERGRAPH')return Math.max(1,comb(dim(r,'vertexCount'),dim(r,'uniformity')));if(r.kind==='PROGRAM')return Math.max(1,dim(r,'maxNodes'));return Math.max(1,dim(r,'universeSize',dim(r,'length',1)))}
+function selected(genes,r){const bits=['BOOLEAN_VECTOR','GRAPH','HYPERGRAPH'].includes(r.kind);return new Set(bits?genes.flatMap((v,i)=>v?[i]:[]):genes.filter(x=>Number.isInteger(x)&&x>=0&&x<universe(r)))}
+function triples(values,n){const p=[...values].map(x=>[x%n,Math.floor(x/n)]);let c=0;for(let i=0;i<p.length;i++)for(let j=i+1;j<p.length;j++)for(let k=j+1;k<p.length;k++)if((p[j][0]-p[i][0])*(p[k][1]-p[i][1])===(p[j][1]-p[i][1])*(p[k][0]-p[i][0]))c++;return c}
+function evaluate(genes,r,e){const s=selected(genes,r);let violations=0,coverage=0;const details=[];for(const c of e.constraints){let value=0,passed=true,detail='';if(c.kind==='forbidden-tuples'){value=c.tuples.filter(t=>t.every(x=>s.has(x))).length;passed=value===0;detail=value+' forbidden tuples selected'}if(c.kind==='coverage-groups'){value=c.groups.filter(g=>g.some(x=>s.has(x))).length;coverage+=value;detail=value+'/'+c.groups.length+' groups covered'}if(c.kind==='cardinality'){value=Math.abs(s.size-c.target);passed=value===0;detail='cardinality delta '+value}if(c.kind==='all-different'){value=genes.length-new Set(genes).size;passed=value===0;detail=value+' repeated values'}if(c.kind==='bounds'){value=genes.filter(x=>x<c.min||x>c.max).length;passed=value===0;detail=value+' values outside bounds'}if(c.kind==='grid-no-three-in-line'){value=triples(s,c.boardSize);passed=value===0;detail=value+' collinear triples'}if(c.kind==='expression-node-limit'){value=Math.max(0,genes.length-c.maxNodes);passed=value===0;detail='expression node excess '+value}if(!passed)violations+=value||1;details.push({kind:c.kind,passed,value,detail})}const a=[...s].sort((x,y)=>x-y);let spread=0;for(let i=0;i<a.length;i++)for(let j=i+1;j<a.length;j++)spread+=Math.abs(a[j]-a[i]);const value=e.objectives.reduce((total,o)=>total+(o.direction==='minimize'?-1:1)*(o.metric==='violations'?violations:o.metric==='coverage'?coverage:o.metric==='spread'?spread:0),0);return {genes,violations,coverage,spread,value,constraintResults:details}}
+parentPort.postMessage(workerData.population.map(genes=>evaluate(genes,workerData.representation,workerData.evaluator)));
+`;
+
 type RawCandidate = Pick<DiscoveryCandidate, 'genes' | 'violations' | 'coverage' | 'spread'>;
 
 export class DiscoveryAbortError extends Error {
@@ -61,6 +80,10 @@ export class DiscoveryEngine {
   }
 
   async start(projectId: string, raw: unknown, signal?: AbortSignal): Promise<DiscoveryRun> {
+    if (raw && typeof raw === 'object' && 'specification' in raw) {
+      const value = raw as { specification: DiscoverySpecification | unknown; config: DiscoveryConfig };
+      return this.startSpecification(projectId, value.specification, value.config, signal);
+    }
     const { problem, config } = DiscoveryEngine.parseInput(raw);
     const now = new Date().toISOString();
     const run: DiscoveryRun = {
@@ -75,13 +98,47 @@ export class DiscoveryEngine {
     return this.execute(run, signal);
   }
 
+  /**
+   * Generic discovery entrance.  The evaluator is a closed declarative DSL;
+   * no user or model supplied JavaScript/Python is ever evaluated here.
+   */
+  async startSpecification(projectId: string, rawSpecification: DiscoverySpecification | unknown, rawConfig: DiscoveryConfig, signal?: AbortSignal): Promise<DiscoveryRun> {
+    const config = configSchema.parse(rawConfig);
+    const source = rawSpecification && typeof rawSpecification === 'object' && 'representation' in rawSpecification
+      ? rawSpecification as DiscoverySpecification : null;
+    // Rebuild from the data-only core on every execution. Persisted validation
+    // flags/hashes are audit evidence, never a bypass around current validators.
+    const specification = makeDiscoverySpecification(projectId, source
+      ? { representation: source.representation, evaluator: source.evaluator, semanticScope: source.semanticScope }
+      : rawSpecification, source?.origin ?? 'MODEL_PROPOSED');
+    if (!specification.validation.schemaValid || !specification.validation.staticValid || !specification.validation.smallCaseValid || !specification.validation.adversarialValid) {
+      throw new Error(`DISCOVERY_SPEC_INVALID: ${specification.validation.errors.join(' ') || 'Specification did not pass safety validation.'}`);
+    }
+    if (config.populationSize * config.generations > (config.evaluationBudget ?? 1_000_000)) throw new Error('RESOURCE_BUDGET_EXCEEDED: discovery configuration exceeds its declared evaluation budget.');
+    const budget = new ResourceBudgetService(this.db).current(projectId);
+    if (config.workerCount > budget.limits.maxWorkers) throw new Error(`RESOURCE_BUDGET_EXCEEDED: workerCount exceeds project limit ${budget.limits.maxWorkers}.`);
+    new ResourceBudgetService(this.db).consume(projectId, 'evaluations', config.populationSize * config.generations);
+    const now = new Date().toISOString();
+    const legacyProblem: DiscoveryProblem = { universeSize: representationUniverse(specification.representation), candidateSize: Number(specification.representation.dimensions.length ?? 1), incompatibilities: [], coverageGroups: [] };
+    const run: DiscoveryRun = {
+      id: randomUUID(), projectId, status: 'RUNNING', problem: legacyProblem, config, generation: 0, totalEvaluated: 0, population: [], archive: [], rngState: config.seed,
+      startedAt: now, updatedAt: now, completedAt: null, error: '', specification, candidateCertificates: [],
+    };
+    let state = config.seed;
+    for (let index = 0; index < config.populationSize; index += 1) { const candidate = createCandidate(specification.representation, state); state = candidate.state; run.population.push(candidate.genes); }
+    run.rngState = state;
+    this.db.saveRecord('discoverySpecifications', specification);
+    this.db.saveRecord('discoveryRuns', run);
+    return this.executeGeneric(run, signal);
+  }
+
   async resume(projectId: string, runId: string, signal?: AbortSignal): Promise<DiscoveryRun> {
     const run = this.db.getProject(projectId, false).discoveryRuns.find((item) => item.id === runId);
     if (!run) throw new Error('Discovery run was not found in this project.');
     if (run.status === 'COMPLETED') return run;
     const resumed: DiscoveryRun = { ...run, status: 'RUNNING', error: '', completedAt: null, updatedAt: new Date().toISOString() };
     this.db.saveRecord('discoveryRuns', resumed);
-    return this.execute(resumed, signal);
+    return resumed.specification ? this.executeGeneric(resumed, signal) : this.execute(resumed, signal);
   }
 
   recoverInterruptedRuns(): number {
@@ -123,6 +180,53 @@ export class DiscoveryEngine {
     }
   }
 
+  private async executeGeneric(initial: DiscoveryRun, signal?: AbortSignal): Promise<DiscoveryRun> {
+    let run = initial; const specification = run.specification;
+    if (!specification) return run;
+    try {
+      for (let generation = run.generation; generation < run.config.generations; generation += 1) {
+        this.throwIfAborted(signal);
+        const rawEvaluated = await this.evaluateGenericPopulation(run.population, specification, run.config.workerCount, signal);
+        this.throwIfAborted(signal);
+        const evaluated = rawEvaluated.map((result) => {
+          const genes = result.genes;
+          const fingerprint = digest({ representation: specification.representation, genes });
+          const candidate: DiscoveryCandidate = {
+            fingerprint, genes, value: candidateValue(genes, specification.representation), representation: specification.representation,
+            violations: result.violations, coverage: result.coverage, spread: result.spread, novelty: novelty(genes, run.archive), paretoRank: 0,
+            objectiveValues: { violations: result.violations, coverage: result.coverage, spread: result.spread, value: result.value }, constraintResults: result.constraintResults,
+            evaluatorHash: specification.evaluatorHash, generation, strategy: run.config.strategy ?? 'evolutionary',
+          };
+          return candidate;
+        });
+        const archive = selectArchive([...run.archive, ...evaluated], run.config.archiveLimit);
+        let state = run.rngState; const next: number[][] = archive.slice(0, Math.min(8, archive.length)).map((candidate) => candidate.genes);
+        const parents = archive.length ? archive : evaluated;
+        while (next.length < run.config.populationSize) {
+          const a = nextRandom(state); state = a.state; const b = nextRandom(state); state = b.state;
+          const first = parents[Math.floor(a.value * parents.length)].genes; const second = parents[Math.floor(b.value * parents.length)].genes;
+          let child: { genes: number[]; state: number };
+          switch (run.config.strategy ?? 'evolutionary') {
+            case 'random': child = createCandidate(specification.representation, state); break;
+            case 'hill-climbing': child = mutateCandidate(first, specification.representation, run.config.mutationRate, state); break;
+            case 'beam': child = mutateCandidate(parents[Math.min(next.length, parents.length - 1)].genes, specification.representation, run.config.mutationRate / 2, state); break;
+            case 'annealing': child = mutateCandidate(first, specification.representation, Math.max(.01, run.config.mutationRate * (1 - generation / run.config.generations)), state); break;
+            default: child = crossoverCandidate(first, second, specification.representation, state); child = mutateCandidate(child.genes, specification.representation, run.config.mutationRate, child.state);
+          }
+          state = child.state; next.push(child.genes);
+        }
+        const certificates = archive.slice(0, 32).map((candidate) => ({ fingerprint: candidate.fingerprint, candidateHash: digest(candidate.value), evaluatorHash: specification.evaluatorHash, resultHash: digest({ objectiveValues: candidate.objectiveValues, constraintResults: candidate.constraintResults }), createdAt: new Date().toISOString() }));
+        run = { ...run, generation: generation + 1, totalEvaluated: run.totalEvaluated + evaluated.length, archive, population: next, rngState: state, candidateCertificates: certificates, updatedAt: new Date().toISOString() };
+        this.db.saveRecord('discoveryRuns', run);
+      }
+      const complete = { ...run, status: 'COMPLETED' as const, completedAt: new Date().toISOString(), updatedAt: new Date().toISOString() }; this.db.saveRecord('discoveryRuns', complete); return complete;
+    } catch (error) {
+      const paused = error instanceof DiscoveryAbortError; const message = paused ? 'Paused by user; resume continues from the last checkpoint.' : error instanceof Error ? error.message : 'Discovery evaluator failed.';
+      const saved = { ...run, status: paused ? 'PAUSED' as const : 'FAILED' as const, error: message, failureCode: paused ? 'CANCELLED' as const : 'WORKER_FAILURE' as const, updatedAt: new Date().toISOString(), completedAt: paused ? null : new Date().toISOString() };
+      this.db.saveRecord('discoveryRuns', saved); return saved;
+    }
+  }
+
   private initialPopulation(problem: DiscoveryProblem, populationSize: number, seed: number): { population: number[][]; rngState: number } {
     let state = seed;
     const population: number[][] = [];
@@ -160,6 +264,13 @@ export class DiscoveryEngine {
     return values.flat();
   }
 
+  private async evaluateGenericPopulation(population: number[][], specification: DiscoverySpecification, workerCount: number, signal?: AbortSignal): Promise<Array<ReturnType<typeof evaluateCandidate>>> {
+    const count = Math.min(workerCount, population.length);
+    const chunks = Array.from({ length: count }, () => [] as number[][]); population.forEach((candidate, index) => chunks[index % count].push(candidate));
+    const values = await Promise.all(chunks.filter((chunk) => chunk.length).map((chunk) => evaluateGenericChunk(chunk, specification, signal)));
+    return values.flat();
+  }
+
   private throwIfAborted(signal?: AbortSignal): void { if (signal?.aborted) throw new DiscoveryAbortError(); }
 }
 
@@ -173,6 +284,20 @@ function evaluateChunk(population: number[][], problem: DiscoveryProblem, signal
     worker.once('message', (value: RawCandidate[]) => { cleanup(); resolve(value); });
     worker.once('error', (error) => { cleanup(); reject(error); });
     worker.once('exit', (code) => { if (code !== 0) { cleanup(); reject(new Error(`Discovery evaluator worker exited with code ${code}.`)); } });
+  });
+}
+
+function evaluateGenericChunk(population: number[][], specification: DiscoverySpecification, signal?: AbortSignal): Promise<Array<ReturnType<typeof evaluateCandidate>>> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) { reject(new DiscoveryAbortError()); return; }
+    const worker = new Worker(genericEvaluatorSource, { eval: true, workerData: { population, representation: specification.representation, evaluator: specification.evaluator } });
+    let settled = false;
+    const settle = (callback: () => void) => { if (settled) return; settled = true; signal?.removeEventListener('abort', abort); callback(); };
+    const abort = () => { void worker.terminate(); settle(() => reject(new DiscoveryAbortError())); };
+    signal?.addEventListener('abort', abort, { once: true });
+    worker.once('message', (value: Array<ReturnType<typeof evaluateCandidate>>) => settle(() => resolve(value)));
+    worker.once('error', (error) => settle(() => reject(error)));
+    worker.once('exit', (code) => { if (code !== 0) settle(() => reject(new Error(`Generic discovery evaluator worker exited with code ${code}.`))); });
   });
 }
 
