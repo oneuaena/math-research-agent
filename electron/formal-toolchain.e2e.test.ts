@@ -95,5 +95,8 @@ realFormalToolchain('Agent formal verification toolchain', () => {
       db.close();
       rmSync(directory, { recursive: true, force: true });
     }
-  }, 650_000);
+  // A cache-miss on a fresh GitHub Windows runner can spend more than the
+  // historical 650 seconds preparing Mathlib. Keep this integration check
+  // bounded, while allowing the first-run toolchain bootstrap to finish.
+  }, 900_000);
 });
