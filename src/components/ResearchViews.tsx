@@ -22,7 +22,7 @@ export function ResearchConsole() {
   const pendingSteering = snapshot.steeringInstructions.filter((instruction) => instruction.status === 'PENDING');
   const steeringConversation = snapshot.conversations.find((conversation) => conversation.sessionId === session?.id);
   const steeringMessages = steeringConversation ? snapshot.messages.filter((message) => message.conversationId === steeringConversation.id).slice(-8) : [];
-  const submit = async () => { if (!steeringText.trim()) return; const textValue = steeringText.trim(); setSteeringText(''); if (/现在在干什么|为什么|best result|what are you doing/i.test(textValue)) setAnswer(await explainResearch(textValue)); else await sendSteering(textValue); };
+  const submit = async () => { if (!steeringText.trim()) return; const textValue = steeringText.trim(); setSteeringText(''); const askingState = /现在在干什么|为什么|最好结果|剩多少预算|best result|what are you doing|why|budget/i.test(textValue); await sendSteering(textValue, askingState ? 'REQUEST_EXPLANATION' : undefined); if (askingState) setAnswer(await explainResearch(textValue)); };
   return <div className="research-console">
     <header className="view-toolbar"><div><h1>{text(zh, '研究会话', 'Research session')}</h1><span>{session ? `${zh ? sessionZh[session.status] ?? session.status : session.status} · ${zh ? stageZh[session.currentStage] ?? session.currentStage : session.currentStage}${researchJob ? ` · ${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : ''}` : researchJob ? `${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : text(zh, '尚未运行', 'Not started')}</span></div></header>
     <div className="research-body">
