@@ -59,6 +59,12 @@ export function validateDiscoveryDefinition(input: unknown): { representation: C
     if (constraint.kind === 'grid-no-three-in-line' && universe < constraint.boardSize * constraint.boardSize) errors.push('grid-no-three-in-line requires a representation universe of boardSize².');
   }
   if (!evaluator.objectives.some((objective) => objective.metric === 'violations')) errors.push('An evaluator must optimize violations so feasibility is auditable.');
+  for (const objective of evaluator.objectives) {
+    if (objective.direction === 'target' && objective.target === undefined) errors.push(`Target objective ${objective.name} requires a numeric target.`);
+  }
+  if (evaluator.aggregation === 'weighted') {
+    if (!evaluator.weights || evaluator.objectives.some((objective) => !Number.isFinite(evaluator.weights?.[objective.name]))) errors.push('Weighted aggregation requires one finite weight for every objective.');
+  }
   return { representation, evaluator, errors: [...new Set(errors)] };
 }
 
@@ -150,7 +156,24 @@ export function candidateValue(genes: number[], representation: CandidateReprese
 
 function candidateLength(representation: CandidateRepresentation): number { if (representation.kind === 'MATRIX') return dimension(representation, 'rows') * dimension(representation, 'columns'); if (representation.kind === 'GRAPH' || representation.kind === 'HYPERGRAPH') return representationUniverse(representation); return dimension(representation, 'length', dimension(representation, 'maxNodes', 1)); }
 function selectedIndices(genes: number[], representation: CandidateRepresentation): Set<number> { const booleanEncoded = ['BOOLEAN_VECTOR', 'GRAPH', 'HYPERGRAPH'].includes(representation.kind); return new Set(booleanEncoded ? genes.flatMap((value, index) => value ? [index] : []) : genes.filter((item) => Number.isInteger(item) && item >= 0 && item < representationUniverse(representation))); }
-function score(violations: number, coverage: number, spread: number, evaluator: EvaluatorDefinition): number { return evaluator.objectives.reduce((total, objective) => total + (objective.direction === 'minimize' ? -1 : 1) * (objective.metric === 'violations' ? violations : objective.metric === 'coverage' ? coverage : objective.metric === 'spread' ? spread : 0), 0); }
+export function objectiveUtility(objective: EvaluatorDefinition['objectives'][number], values: Record<string, number>): number {
+  const value = values[objective.metric] ?? 0;
+  if (objective.direction === 'minimize') return -value;
+  if (objective.direction === 'maximize') return value;
+  return -Math.abs(value - (objective.target ?? 0));
+}
+
+/** Objective value is driven only by the declared evaluator, not fixed UI metrics. */
+export function aggregateObjectiveValue(evaluator: EvaluatorDefinition, values: Record<string, number>): number {
+  return evaluator.objectives.reduce((total, objective, index) => {
+    const utility = objectiveUtility(objective, values);
+    if (evaluator.aggregation === 'weighted') return total + utility * (evaluator.weights?.[objective.name] ?? 0);
+    // Lexicographic and Pareto have no scalar semantics.  This deterministic
+    // value is a certificate aid only; archive ordering uses their real rules.
+    return total + utility / 10 ** index;
+  }, 0);
+}
+function score(violations: number, coverage: number, spread: number, evaluator: EvaluatorDefinition): number { return aggregateObjectiveValue(evaluator, { violations, coverage, spread, novelty: 0, value: 0 }); }
 function random(state: number): { value: number; state: number } { const next = ((state * 48_271) % 2_147_483_647) || 1; return { value: next / 2_147_483_647, state: next }; }
 function combinations(n: number, k: number): number { if (k > n || k < 0) return 0; let result = 1; for (let i = 1; i <= k; i += 1) result = (result * (n - k + i)) / i; return Math.min(Math.round(result), 1_000_000); }
 function collinearTriples(selected: Set<number>, boardSize: number): number { const points = [...selected].map((point) => [point % boardSize, Math.floor(point / boardSize)] as const); let count = 0; for (let i = 0; i < points.length; i += 1) for (let j = i + 1; j < points.length; j += 1) for (let k = j + 1; k < points.length; k += 1) if ((points[j][0] - points[i][0]) * (points[k][1] - points[i][1]) === (points[j][1] - points[i][1]) * (points[k][0] - points[i][0])) count += 1; return count; }

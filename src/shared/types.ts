@@ -761,6 +761,12 @@ export interface KnowledgeRecord {
   hashes: Record<string, string>;
   relatedIds: string[];
   verificationStatus: VerificationStatus;
+  /** Structured graph identity; text content is explanatory only. */
+  entityType?: 'THEOREM' | 'LEMMA' | 'DEFINITION' | 'CONSTRUCTION' | 'EVALUATOR' | 'TECHNIQUE' | 'FAILED_APPROACH' | 'CERTIFICATE';
+  relationships?: Array<{ type: 'PROVES' | 'USES' | 'REFUTES' | 'GENERALIZES' | 'SPECIALIZES' | 'DERIVED_FROM' | 'SUPPORTED_BY' | 'INVALIDATED_BY'; targetId: string; createdAt: string }>;
+  lifecycle?: 'ACTIVE' | 'STALE' | 'NEEDS_REVALIDATION' | 'INVALIDATED';
+  formalBindingId?: string | null;
+  invalidatedBy?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -772,7 +778,8 @@ export interface FormalProofSearchRun {
   status: 'RUNNING' | 'COMPLETED' | 'PAUSED' | 'FAILED';
   goalState: string;
   attemptedTactics: Array<{ script: string; status: 'FAILED' | 'PARTIAL' | 'VERIFIED'; output: string; remainingGoals: number }>;
-  beam: Array<{ script: string; remainingGoals: number; score: number }>;
+  /** Every beam entry is a Lean-replayed tactic prefix, never a guessed goal. */
+  beam: Array<{ proofStateId: string; parentStateId: string | null; tacticHistory: string[]; goals: Array<{ localContext: string[]; target: string }>; stateHash: string; depth: number; score: number; status: 'ACTIVE' | 'CLOSED' | 'FAILED' }>;
   totalAttempts: number;
   maxAttempts: number;
   startedAt: string;

@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ClaimVersion, Conversation, ConversationMessage, ResearchBranch, ResearchEvidence, ResearchNode, ResearchSession, SteeringAuditEntry, SteeringInstruction, SteeringInstructionType } from '../src/shared/types';
 import type { ResearchDatabase } from './database';
 import type { ModelProvider } from './provider';
+import { ResearchKnowledgeBase } from './research-knowledge-base';
 
 const NOW = () => new Date().toISOString();
 const STOP_TYPES = new Set<SteeringInstructionType>(['PAUSE_RESEARCH', 'STOP_DISCOVERY_SEARCH', 'STOP_PROOF_SEARCH', 'PAUSE_BRANCH', 'ABANDON_BRANCH']);
@@ -166,6 +167,7 @@ export class ResearchSteeringService {
   private retractEvidence(projectId: string, instruction: SteeringInstruction): boolean {
     const evidenceId = String(instruction.payload.evidenceId ?? ''); const snapshot = this.db.getProject(projectId, false); const evidence = snapshot.evidence.find((item) => item.id === evidenceId); if (!evidence || evidence.state === 'RETRACTED') return false;
     this.db.saveRecord('evidence', { ...evidence, state: 'RETRACTED', retractedAt: NOW(), retractionReason: instruction.rawText });
+    new ResearchKnowledgeBase(this.db).invalidateByDependency(projectId, evidence.id);
     for (const node of snapshot.nodes.filter((item) => (item.evidenceIds ?? []).includes(evidence.id))) this.db.saveRecord('nodes', { ...node, status: 'UNKNOWN', verificationStatus: 'unverified', summary: `${node.summary}\nInvalidated because evidence ${evidence.id} was retracted.`, updatedAt: NOW() });
     for (const branch of snapshot.branches.filter((item) => item.id === evidence.branchId)) this.db.saveRecord('branches', { ...branch, status: 'blocked', failures: [...branch.failures, `Evidence retracted: ${evidence.title}`].slice(-20), updatedAt: NOW() });
     return true;

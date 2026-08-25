@@ -3,7 +3,7 @@ import { Worker } from 'node:worker_threads';
 import { z } from 'zod';
 import type { DiscoveryCandidate, DiscoveryConfig, DiscoveryProblem, DiscoveryRun } from '../src/shared/types';
 import type { ResearchDatabase } from './database';
-import { candidateValue, createCandidate, crossoverCandidate, digest, evaluateCandidate, makeDiscoverySpecification, mutateCandidate, representationUniverse } from './discovery-core';
+import { aggregateObjectiveValue, candidateValue, createCandidate, crossoverCandidate, digest, evaluateCandidate, makeDiscoverySpecification, mutateCandidate, objectiveUtility, representationUniverse } from './discovery-core';
 import type { DiscoverySpecification } from '../src/shared/types';
 import { ResourceBudgetService } from './resource-budget';
 
@@ -194,12 +194,12 @@ export class DiscoveryEngine {
           const candidate: DiscoveryCandidate = {
             fingerprint, genes, value: candidateValue(genes, specification.representation), representation: specification.representation,
             violations: result.violations, coverage: result.coverage, spread: result.spread, novelty: novelty(genes, run.archive), paretoRank: 0,
-            objectiveValues: { violations: result.violations, coverage: result.coverage, spread: result.spread, value: result.value }, constraintResults: result.constraintResults,
+            objectiveValues: { violations: result.violations, coverage: result.coverage, spread: result.spread, novelty: novelty(genes, run.archive), value: result.value }, constraintResults: result.constraintResults,
             evaluatorHash: specification.evaluatorHash, generation, strategy: run.config.strategy ?? 'evolutionary',
           };
           return candidate;
         });
-        const archive = selectArchive([...run.archive, ...evaluated], run.config.archiveLimit);
+        const archive = selectArchive([...run.archive, ...evaluated], run.config.archiveLimit, specification.evaluator);
         let state = run.rngState; const next: number[][] = archive.slice(0, Math.min(8, archive.length)).map((candidate) => candidate.genes);
         const parents = archive.length ? archive : evaluated;
         while (next.length < run.config.populationSize) {
@@ -347,23 +347,41 @@ function symmetricDifference(left: number[], right: number[]): number {
   return values.size;
 }
 
-function dominates(left: DiscoveryCandidate, right: DiscoveryCandidate): boolean {
+function dominates(left: DiscoveryCandidate, right: DiscoveryCandidate, evaluator?: DiscoverySpecification['evaluator']): boolean {
+  if (evaluator) {
+    if (left.violations > right.violations) return false;
+    const leftValues = objectiveValues(left); const rightValues = objectiveValues(right);
+    const noWorse = evaluator.objectives.every((objective) => objectiveUtility(objective, leftValues) >= objectiveUtility(objective, rightValues));
+    const better = left.violations < right.violations || evaluator.objectives.some((objective) => objectiveUtility(objective, leftValues) > objectiveUtility(objective, rightValues));
+    return noWorse && better;
+  }
   const noWorse = left.violations <= right.violations && left.coverage >= right.coverage && left.spread >= right.spread && left.novelty >= right.novelty;
   return noWorse && (left.violations < right.violations || left.coverage > right.coverage || left.spread > right.spread || left.novelty > right.novelty);
 }
 
-function selectArchive(candidates: DiscoveryCandidate[], limit: number): DiscoveryCandidate[] {
+function selectArchive(candidates: DiscoveryCandidate[], limit: number, evaluator?: DiscoverySpecification['evaluator']): DiscoveryCandidate[] {
   const unique = [...new Map(candidates.map((candidate) => [candidate.fingerprint, candidate])).values()];
   const remaining = new Set(unique.map((candidate) => candidate.fingerprint)); const ranked: DiscoveryCandidate[] = []; let rank = 0;
   while (remaining.size) {
-    const front = unique.filter((candidate) => remaining.has(candidate.fingerprint) && !unique.some((other) => remaining.has(other.fingerprint) && other.fingerprint !== candidate.fingerprint && dominates(other, candidate)));
+    const front = unique.filter((candidate) => remaining.has(candidate.fingerprint) && !unique.some((other) => remaining.has(other.fingerprint) && other.fingerprint !== candidate.fingerprint && dominates(other, candidate, evaluator)));
     if (!front.length) break;
-    front.sort(compareCandidates); front.forEach((candidate) => { ranked.push({ ...candidate, paretoRank: rank }); remaining.delete(candidate.fingerprint); }); rank += 1;
+    front.sort((left, right) => compareCandidates(left, right, evaluator)); front.forEach((candidate) => { ranked.push({ ...candidate, paretoRank: rank }); remaining.delete(candidate.fingerprint); }); rank += 1;
     if (ranked.length >= limit) break;
   }
   return ranked.slice(0, limit);
 }
 
-function compareCandidates(left: DiscoveryCandidate, right: DiscoveryCandidate): number {
+function compareCandidates(left: DiscoveryCandidate, right: DiscoveryCandidate, evaluator?: DiscoverySpecification['evaluator']): number {
+  if (evaluator) {
+    const hard = left.violations - right.violations; if (hard) return hard;
+    const leftValues = objectiveValues(left); const rightValues = objectiveValues(right);
+    if (evaluator.aggregation === 'weighted') {
+      const leftScore = aggregateObjectiveValue(evaluator, leftValues); const rightScore = aggregateObjectiveValue(evaluator, rightValues);
+      if (leftScore !== rightScore) return rightScore - leftScore;
+    } else if (evaluator.aggregation === 'lexicographic') {
+      for (const objective of evaluator.objectives) { const difference = objectiveUtility(objective, rightValues) - objectiveUtility(objective, leftValues); if (difference) return difference; }
+    }
+  }
   return left.violations - right.violations || right.coverage - left.coverage || right.spread - left.spread || right.novelty - left.novelty || left.fingerprint.localeCompare(right.fingerprint);
 }
+function objectiveValues(candidate: DiscoveryCandidate): Record<string, number> { return { violations: candidate.violations, coverage: candidate.coverage, spread: candidate.spread, novelty: candidate.novelty, value: 0, ...candidate.objectiveValues }; }

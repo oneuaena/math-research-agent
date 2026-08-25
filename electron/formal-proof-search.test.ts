@@ -15,9 +15,13 @@ describe('FormalProofSearchEngine', () => {
   it('certifies only a tactic that closes the frozen statement and records failures separately', async () => {
     const { db, projectId } = setup();
     const binding = new FormalBindingService(db).freezeAiProposed(projectId, 'For every natural n, n=n.', '{"target":"n=n"}', 'theorem frozen (n : Nat) : n = n');
-    const runTool = vi.fn(async (invocation: { input: { code: string } }) => ({ ok: /\brfl\b/.test(invocation.input.code) && !/exact \?_/.test(invocation.input.code), success: /\brfl\b/.test(invocation.input.code), output: 'kernel output', stdout: '', stderr: '', error: 'unsolved goals', errorType: 'PROGRAM_ERROR' as const, exitCode: 0, durationMs: 1, timeout: false, verificationStatus: 'FORMALLY_VERIFIED' as const }));
+    const runTool = vi.fn(async (invocation: { input: { code: string } }) => {
+      const code = invocation.input.code;
+      const replay = code.includes('trace_state'); const closed = /\brfl\b/.test(code) && !replay;
+      return { ok: replay || closed, success: replay || closed, output: replay ? 'n : Nat\n⊢ n = n' : 'kernel output', stdout: '', stderr: '', error: closed ? '' : 'unsolved goals', errorType: closed ? 'NONE' as const : 'PROGRAM_ERROR' as const, exitCode: 0, durationMs: 1, timeout: false, verificationStatus: closed ? 'FORMALLY_VERIFIED' as const : 'SUCCESS' as const };
+    });
     const result = await new FormalProofSearchEngine(db, { run: runTool } as unknown as ToolRunner).run(projectId, binding.id, ['sorry', 'rfl'], 8);
-    expect(result.status).toBe('COMPLETED'); expect(result.attemptedTactics.map((item) => item.script)).toContain('rfl');
+    expect(result.status).toBe('COMPLETED'); expect(result.attemptedTactics.map((item) => item.script)).toContain('rfl'); expect(result.beam[0].tacticHistory).toEqual(['rfl']); expect(result.beam[0].goals).toEqual([]);
     expect(db.getProject(projectId, false).formalBindings.find((item) => item.id === binding.id)?.status).toBe('KERNEL_CERTIFIED');
     expect(runTool.mock.calls.every(([call]) => String(call.input.code).includes('theorem frozen (n : Nat) : n = n'))).toBe(true);
   });
