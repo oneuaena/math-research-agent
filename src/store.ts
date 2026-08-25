@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { AgentEvent, ChatEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot, ResearchJob } from './shared/types';
+import type { AgentEvent, ChatEvent, CollectionName, CreateProjectInput, Project, ProjectSnapshot, ResearchJob, SteeringInstructionType } from './shared/types';
 
 export type WorkspaceView = 'chat' | 'research' | 'branches' | 'proofs' | 'formal' | 'result' | 'attacks' | 'discovery' | 'notebook' | 'tree' | 'conjectures' | 'lemmas' | 'experiments' | 'papers' | 'failures' | 'memory' | 'reports';
 
@@ -35,6 +35,8 @@ interface AppState {
   sendChat(content: string, attachmentSourceIds?: string[]): Promise<void>;
   stopChat(): Promise<void>;
   regenerateChat(messageId: string): Promise<void>;
+  sendSteering(rawText: string, type?: SteeringInstructionType, payload?: Record<string, unknown>, targetBranchId?: string | null): Promise<void>;
+  explainResearch(rawText: string): Promise<string>;
   importDocuments(stayInView?: boolean): Promise<string[]>;
   importDropped(files: File[]): Promise<string[]>;
   toggleTheme(): void;
@@ -175,6 +177,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     try { await window.research.chat.regenerate(projectId, messageId); await get().refresh(); }
     catch (error) { set({ error: message(error) }); }
     finally { set({ chatSending: false }); }
+  },
+  async sendSteering(rawText, type, payload = {}, targetBranchId = null) {
+    const projectId = get().snapshot?.project.id; if (!projectId) return;
+    try { set({ snapshot: await window.research.steering.submit(projectId, { rawText, type, payload, targetBranchId }), error: null }); }
+    catch (error) { set({ error: message(error) }); }
+  },
+  async explainResearch(rawText) {
+    const projectId = get().snapshot?.project.id; if (!projectId) return '';
+    try { const result = await window.research.steering.explain(projectId, rawText); set({ snapshot: result.snapshot, error: null }); return result.answer; }
+    catch (error) { set({ error: message(error) }); return ''; }
   },
   async importDocuments(stayInView = false) {
     const id = get().snapshot?.project.id;

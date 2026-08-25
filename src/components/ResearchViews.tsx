@@ -1,4 +1,5 @@
-import { AlertTriangle, Binary, CheckCircle2, CircleDot, Clock3, GitBranch, Network, ShieldCheck } from 'lucide-react';
+import { useState } from 'react';
+import { AlertTriangle, Binary, CheckCircle2, CircleDot, Clock3, GitBranch, Network, ShieldCheck, Send } from 'lucide-react';
 import { canDisplayVerifiedProof, specificationLevel } from '../shared/research';
 import { useAppStore } from '../store';
 import { MathMarkdown } from './MathMarkdown';
@@ -9,12 +10,17 @@ const sessionZh: Record<string, string> = { RUNNING: '运行中', PAUSED: '已�
 const roleZh: Record<string, string> = { 'research-planner': '研究规划', explorer: '探索', 'experimental-mathematician': '数学实验', 'lemma-generator': '引理生成', 'proof-builder': '证明构建', skeptic: '证明批判', 'independent-verifier': '独立验证', 'research-synthesizer': '研究综合' };
 
 export function ResearchConsole() {
-  const { snapshot, researchJob, language } = useAppStore();
+  const { snapshot, researchJob, language, sendSteering, explainResearch } = useAppStore();
+  const [steeringText, setSteeringText] = useState(''); const [answer, setAnswer] = useState('');
   if (!snapshot) return null;
   const zh = language === 'zh';
   const session = snapshot.sessions.at(-1);
   const spec = snapshot.specifications.at(-1);
   const recent = snapshot.researchSteps.slice(-18).reverse();
+  const activeDiscovery = snapshot.discoveryRuns.filter((run) => run.status === 'RUNNING'); const activeProof = snapshot.formalProofSearchRuns.filter((run) => run.status === 'RUNNING');
+  const bestCandidate = snapshot.discoveryRuns.flatMap((run) => run.archive).sort((a, b) => a.violations - b.violations || b.coverage - a.coverage)[0];
+  const pendingSteering = snapshot.steeringInstructions.filter((instruction) => instruction.status === 'PENDING');
+  const submit = async () => { if (!steeringText.trim()) return; const textValue = steeringText.trim(); setSteeringText(''); if (/现在在干什么|为什么|best result|what are you doing/i.test(textValue)) setAnswer(await explainResearch(textValue)); else await sendSteering(textValue); };
   return <div className="research-console">
     <header className="view-toolbar"><div><h1>{text(zh, '研究会话', 'Research session')}</h1><span>{session ? `${zh ? sessionZh[session.status] ?? session.status : session.status} · ${zh ? stageZh[session.currentStage] ?? session.currentStage : session.currentStage}${researchJob ? ` · ${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : ''}` : researchJob ? `${text(zh, '持久任务', 'Persistent job')} ${researchJob.status}` : text(zh, '尚未运行', 'Not started')}</span></div></header>
     <div className="research-body">
@@ -23,6 +29,19 @@ export function ResearchConsole() {
         <Metric icon={GitBranch} label={text(zh, '分支', 'Branches')} value={String(snapshot.branches.length)} />
         <Metric icon={ShieldCheck} label={text(zh, '证据', 'Evidence')} value={String(snapshot.evidence.length)} />
         <Metric icon={Network} label={text(zh, '检查点', 'Checkpoints')} value={String(session?.checkpointCount ?? 0)} />
+      </section>
+      <section className="research-panel steering-panel">
+        <div className="research-panel-title"><div><Send size={15} /><strong>{text(zh, '实时研究引导', 'Live research steering')}</strong></div><span>{pendingSteering.length} {text(zh, '待处理', 'pending')}</span></div>
+        <p className="muted">{text(zh, '此消息会进入当前 Research Session 的审计队列；不能绕过 Lean、证据或形式化验证。', 'Messages enter this session’s audited steering queue; they cannot bypass Lean, evidence, or formal verification.')}</p>
+        <div className="steering-compose"><textarea value={steeringText} onChange={(event) => setSteeringText(event.target.value)} placeholder={text(zh, '例如：暂停这一轮，新增一个 asymmetric local search 分支。', 'Example: pause this round and add an asymmetric local-search branch.')} /><button className="button primary" onClick={() => void submit()}><Send size={15} />{text(zh, '发送引导', 'Steer')}</button></div>
+        {answer && <pre className="steering-answer">{answer}</pre>}
+        {pendingSteering.length > 0 && <div className="steering-queue">{pendingSteering.map((instruction) => <div key={instruction.id}><b>{instruction.type}</b><span>{instruction.rawText}</span></div>)}</div>}
+      </section>
+      <section className="research-metrics steering-state">
+        <Metric icon={Binary} label={text(zh, 'Discovery 任务', 'Discovery jobs')} value={String(activeDiscovery.length)} />
+        <Metric icon={ShieldCheck} label={text(zh, 'Proof 搜索', 'Proof searches')} value={String(activeProof.length)} />
+        <Metric icon={GitBranch} label={text(zh, '最佳候选', 'Best candidate')} value={bestCandidate ? `${bestCandidate.violations} v / ${bestCandidate.coverage} c` : '—'} />
+        <Metric icon={CircleDot} label={text(zh, '当前分支', 'Current branch')} value={snapshot.branches.find((branch) => branch.id === session?.activeBranchId)?.title ?? '—'} />
       </section>
       {session?.pauseReason && <div className="research-notice"><CircleDot size={14} /><span>{session.pauseReason}</span></div>}
       {researchJob?.lastError && <div className="research-notice"><AlertTriangle size={14} /><span>{researchJob.lastError}{researchJob.nextRunAt ? ` · ${text(zh, '下次重试', 'Retry')} ${new Date(researchJob.nextRunAt).toLocaleString()}` : ''}</span></div>}

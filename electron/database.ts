@@ -21,6 +21,7 @@ const COLLECTIONS: CollectionName[] = [
   'specifications', 'sessions', 'researchSteps', 'branches', 'evidence', 'graphEdges', 'proofs',
   'conversations', 'messages', 'literature', 'noveltyChecks', 'formalBindings', 'discoveryRuns',
   'discoverySpecifications', 'resourceBudgets', 'knowledgeRecords', 'formalProofSearchRuns', 'benchmarkRuns',
+  'steeringInstructions', 'steeringAudit', 'claimVersions',
 ];
 
 const DEFAULT_SETTINGS: ProviderSettings = {
@@ -272,6 +273,9 @@ export class ResearchDatabase {
       resourceBudgets: this.getRecords(id, 'resourceBudgets'),
       knowledgeRecords: this.getRecords(id, 'knowledgeRecords'),
       formalProofSearchRuns: this.getRecords(id, 'formalProofSearchRuns'),
+      steeringInstructions: this.getRecords(id, 'steeringInstructions'),
+      steeringAudit: this.getRecords(id, 'steeringAudit'),
+      claimVersions: this.getRecords(id, 'claimVersions'),
       specifications: this.getRecords(id, 'specifications'),
       formalBindings: this.getRecords(id, 'formalBindings'),
       sessions: this.getRecords(id, 'sessions'),

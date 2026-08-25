@@ -38,6 +38,10 @@ const api: DesktopApi = {
   benchmarks: {
     run: (projectId) => ipcRenderer.invoke('benchmarks:run', projectId),
   },
+  steering: {
+    submit: (projectId, input) => ipcRenderer.invoke('steering:submit', projectId, input),
+    explain: (projectId, rawText) => ipcRenderer.invoke('steering:explain', projectId, rawText),
+  },
   documents: {
     import: (projectId: string) => ipcRenderer.invoke('documents:import', projectId),
     importPaths: (projectId: string, paths: string[]) => ipcRenderer.invoke('documents:import-paths', projectId, paths),

@@ -197,6 +197,57 @@ export interface FormalBinding {
   status: 'FROZEN' | 'KERNEL_CERTIFIED' | 'INVALID';
   createdAt: string;
   updatedAt: string;
+  /** Immutable claim version this binding was frozen against. */
+  claimVersionId?: string;
+}
+
+export type SteeringInstructionType =
+  | 'ADD_HYPOTHESIS' | 'ADD_BRANCH' | 'PRIORITIZE_BRANCH' | 'DEPRIORITIZE_BRANCH'
+  | 'PAUSE_BRANCH' | 'ABANDON_BRANCH' | 'RESUME_BRANCH' | 'REQUEST_REPLAN'
+  | 'REQUEST_EXPLANATION' | 'ADD_EVIDENCE' | 'RETRACT_EVIDENCE' | 'ADD_CONSTRAINT'
+  | 'REMOVE_CONSTRAINT' | 'CHANGE_SEARCH_STRATEGY' | 'CHANGE_DISCOVERY_PARAMETERS'
+  | 'CHANGE_RESOURCE_BUDGET' | 'PRIORITIZE_LEMMA' | 'START_DISCOVERY_SEARCH'
+  | 'STOP_DISCOVERY_SEARCH' | 'START_PROOF_SEARCH' | 'STOP_PROOF_SEARCH'
+  | 'PAUSE_RESEARCH' | 'RESUME_RESEARCH' | 'CREATE_CLAIM_VERSION' | 'REQUEST_STATUS_UPGRADE'
+  | 'UNCLASSIFIED';
+
+export interface SteeringInstruction {
+  id: string;
+  projectId: string;
+  sessionId: string | null;
+  type: SteeringInstructionType;
+  rawText: string;
+  payload: Record<string, unknown>;
+  targetBranchId: string | null;
+  priority: 'NORMAL' | 'HIGH' | 'URGENT';
+  status: 'PENDING' | 'APPLIED' | 'REJECTED' | 'SUPERSEDED';
+  interpretation: string;
+  interpretationSource: 'STRUCTURED' | 'RULE_FALLBACK' | 'MODEL';
+  createdAt: string;
+  appliedAt: string | null;
+}
+
+export interface SteeringAuditEntry {
+  id: string;
+  projectId: string;
+  sessionId: string | null;
+  instructionId: string;
+  timestamp: string;
+  affectedBranchId: string | null;
+  previousState: string;
+  newState: string;
+  reason: string;
+  modelResponse: string;
+}
+
+export interface ClaimVersion {
+  id: string;
+  projectId: string;
+  parentClaimVersionId: string | null;
+  statement: string;
+  status: 'USER_PROPOSED' | 'HYPOTHESIS';
+  createdByInstructionId: string | null;
+  createdAt: string;
 }
 
 export interface ResearchBranch {
@@ -231,6 +282,9 @@ export interface ResearchEvidence {
   experimentIds: string[];
   reproducible: boolean;
   createdAt: string;
+  state?: 'ACTIVE' | 'RETRACTED';
+  retractedAt?: string | null;
+  retractionReason?: string;
 }
 
 export interface ResearchStep {
@@ -493,6 +547,8 @@ export interface Conversation {
   title: string;
   createdAt: string;
   updatedAt: string;
+  /** Present only for the durable steering conversation of a research session. */
+  sessionId?: string | null;
 }
 
 export interface MessageCitation {
@@ -753,6 +809,9 @@ export interface ProjectSnapshot {
   resourceBudgets: ResourceBudgetRecord[];
   knowledgeRecords: KnowledgeRecord[];
   formalProofSearchRuns: FormalProofSearchRun[];
+  steeringInstructions: SteeringInstruction[];
+  steeringAudit: SteeringAuditEntry[];
+  claimVersions: ClaimVersion[];
   specifications: StructuredSpecification[];
   formalBindings: FormalBinding[];
   sessions: ResearchSession[];
@@ -822,7 +881,7 @@ export interface CredentialStatus { configured: boolean; masked: string; secureS
 
 export type CollectionName = 'blocks' | 'nodes' | 'propositions' | 'experiments' | 'memories' | 'failedAttempts' | 'sources' | 'attacks' | 'stressResults'
   | 'specifications' | 'sessions' | 'researchSteps' | 'branches' | 'evidence' | 'graphEdges' | 'proofs'
-  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings' | 'discoveryRuns' | 'discoverySpecifications' | 'resourceBudgets' | 'knowledgeRecords' | 'formalProofSearchRuns' | 'benchmarkRuns';
+  | 'conversations' | 'messages' | 'literature' | 'noveltyChecks' | 'formalBindings' | 'discoveryRuns' | 'discoverySpecifications' | 'resourceBudgets' | 'knowledgeRecords' | 'formalProofSearchRuns' | 'benchmarkRuns' | 'steeringInstructions' | 'steeringAudit' | 'claimVersions';
 
 export interface AgentEvent {
   projectId: string;
@@ -898,6 +957,10 @@ export interface DesktopApi {
     stop(projectId: string): Promise<DiscoveryRun | null>;
   };
   benchmarks: { run(projectId: string): Promise<unknown>; };
+  steering: {
+    submit(projectId: string, input: { rawText: string; type?: SteeringInstructionType; payload?: Record<string, unknown>; targetBranchId?: string | null }): Promise<ProjectSnapshot>;
+    explain(projectId: string, rawText: string): Promise<{ answer: string; snapshot: ProjectSnapshot }>;
+  };
   documents: {
     import(projectId: string): Promise<ProjectSnapshot | null>;
     importPaths(projectId: string, paths: string[]): Promise<ProjectSnapshot>;

@@ -40,6 +40,7 @@ export function createFormalBinding(input: {
   formalIr: string;
   leanStatement: string;
   mappingAuthority: FormalBinding['mappingAuthority'];
+  claimVersionId?: string;
   id?: string;
   createdAt?: string;
 }): FormalBinding {
@@ -60,6 +61,7 @@ export function createFormalBinding(input: {
     mappingAuthority: input.mappingAuthority,
     equivalenceStatus: input.mappingAuthority === 'USER_CONFIRMED' ? 'USER_CONFIRMED' : 'NOT_INDEPENDENTLY_CERTIFIED',
     status: 'FROZEN', createdAt, updatedAt: createdAt,
+    claimVersionId: input.claimVersionId,
   };
 }
 
@@ -76,13 +78,13 @@ export class FormalBindingService {
 
   freezeUserConfirmed(projectId: string, originalStatement: string, formalIr: string, leanSource: string): FormalBinding {
     this.database.getProject(projectId, false);
-    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanStatement: leanStatementFromSource(leanSource), mappingAuthority: 'USER_CONFIRMED' });
+    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanStatement: leanStatementFromSource(leanSource), mappingAuthority: 'USER_CONFIRMED', claimVersionId: this.claimVersionFor(projectId, originalStatement) });
     return this.saveFrozen(binding);
   }
 
   freezeAiProposed(projectId: string, originalStatement: string, formalIr: string, leanStatement: string): FormalBinding {
     this.database.getProject(projectId, false);
-    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanStatement, mappingAuthority: 'AI_PROPOSED' });
+    const binding = createFormalBinding({ projectId, originalStatement, formalIr, leanStatement, mappingAuthority: 'AI_PROPOSED', claimVersionId: this.claimVersionFor(projectId, originalStatement) });
     return this.saveFrozen(binding);
   }
 
@@ -114,5 +116,12 @@ export class FormalBindingService {
     };
     this.database.saveRecord('formalBindings', updated);
     return { ok: true, binding: updated };
+  }
+
+  private claimVersionFor(projectId: string, originalStatement: string): string | undefined {
+    const snapshot = this.database.getProject(projectId, false);
+    const normalized = canonical(originalStatement);
+    return snapshot.claimVersions.slice().reverse().find((claim) => canonical(claim.statement) === normalized)?.id
+      ?? snapshot.claimVersions[0]?.id;
   }
 }

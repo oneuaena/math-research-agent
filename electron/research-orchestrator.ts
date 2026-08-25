@@ -15,6 +15,7 @@ import { makeDiscoverySpecification } from './discovery-core';
 import { FormalProofSearchEngine } from './formal-proof-search';
 import { ResearchKnowledgeBase } from './research-knowledge-base';
 import { ResourceBudgetService } from './resource-budget';
+import { ResearchSteeringService } from './research-steering';
 
 export interface ResearchRunOptions {
   resumeRequested?: boolean;
@@ -65,8 +66,17 @@ export class ResearchOrchestrator {
       while (!signal.aborted && runActions < settings.maxIterations && performance.now() - runStarted < settings.maxResearchMinutes * 60_000
         && session.totalElapsedMs < settings.maxAutonomousHours * 3_600_000 && session.totalTokenUsage < settings.maxTotalTokens) {
         snapshot = this.db.getProject(projectId, false);
+        // Steering is deliberately checked at a safe stage boundary. Any
+        // urgent steering received while a worker/tool was running is applied
+        // here after that job has checkpointed or observed cancellation.
+        const steering = new ResearchSteeringService(this.db).applyPending(projectId, session);
+        session = steering.session;
+        if (steering.replan && session.status !== 'PAUSED') session = { ...session, nextStage: 'REPLAN', updatedAt: now() };
+        this.db.saveRecord('sessions', session);
+        if (steering.pause || session.status === 'PAUSED') break;
+        snapshot = this.db.getProject(projectId, false);
         const stage = session.nextStage;
-        if (stage === 'PAUSED' || stage === 'FAILED' || stage === 'COMPLETE') break;
+        if (stage === 'FAILED' || stage === 'COMPLETE') break;
         this.writeState('action_started', session, resumeRequested, true);
         const started = performance.now();
         const pending = this.activity(projectId, stage, STAGE_LABELS[stage], 'running');
@@ -76,6 +86,11 @@ export class ResearchOrchestrator {
         const branch = this.pickBranch(snapshot.branches, session);
         const { action, specification } = await this.executeStage(stage, snapshot, branch, signal);
         if (signal.aborted) break;
+        const afterStageSteering = new ResearchSteeringService(this.db).applyPending(projectId, session);
+        session = afterStageSteering.session;
+        if (afterStageSteering.replan && session.status !== 'PAUSED') session = { ...session, nextStage: 'REPLAN', updatedAt: now() };
+        this.db.saveRecord('sessions', session);
+        if (afterStageSteering.pause || session.nextStage === 'PAUSED') break;
         const toolData = await this.persistActionArtifacts(projectId, session, stage, branch, action, specification, signal);
         snapshot = this.db.getProject(projectId, false);
 

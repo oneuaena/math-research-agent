@@ -18,6 +18,7 @@ import { ResearchJobManager } from './research-job-manager';
 import { ToolRunner } from './tool-runner';
 import { DiscoveryEngine } from './discovery-engine';
 import { BenchmarkRunner } from './benchmark-runner';
+import { ResearchSteeringService, isUrgentSteering } from './research-steering';
 
 let mainWindow: BrowserWindow | null = null;
 let database: ResearchDatabase;
@@ -29,6 +30,7 @@ let literature: LiteratureSearchService;
 let formalBindings: FormalBindingService;
 let chat: ChatService;
 let discovery: DiscoveryEngine;
+let steering: ResearchSteeringService;
 const discoveryControllers = new Map<string, AbortController>();
 let loginStartupEnabled: boolean | null = null;
 
@@ -140,11 +142,11 @@ function registerIpc(): void {
   ipcMain.handle('projects:update', (_event, id: string, patch: Partial<CreateProjectInput>) => database.updateProject(id, patch));
   ipcMain.handle('projects:remove', (_event, id: string) => database.removeProject(id));
   ipcMain.handle('records:save', (_event, collection: CollectionName, record: { id: string; projectId: string }) => {
-    if (['formalBindings', 'discoveryRuns', 'discoverySpecifications', 'resourceBudgets', 'formalProofSearchRuns', 'benchmarkRuns'].includes(collection)) throw new Error('MAIN_PROCESS_RECORD_ONLY: use the dedicated main-process service.');
+    if (['formalBindings', 'discoveryRuns', 'discoverySpecifications', 'resourceBudgets', 'formalProofSearchRuns', 'benchmarkRuns', 'steeringInstructions', 'steeringAudit', 'claimVersions'].includes(collection)) throw new Error('MAIN_PROCESS_RECORD_ONLY: use the dedicated main-process service.');
     return database.saveRecord(collection, record);
   });
   ipcMain.handle('records:remove', (_event, collection: CollectionName, id: string, projectId: string) => {
-    if (['formalBindings', 'discoveryRuns', 'discoverySpecifications', 'resourceBudgets', 'formalProofSearchRuns', 'benchmarkRuns'].includes(collection)) throw new Error('MAIN_PROCESS_RECORD_ONLY: this record cannot be deleted from the renderer.');
+    if (['formalBindings', 'discoveryRuns', 'discoverySpecifications', 'resourceBudgets', 'formalProofSearchRuns', 'benchmarkRuns', 'steeringInstructions', 'steeringAudit', 'claimVersions'].includes(collection)) throw new Error('MAIN_PROCESS_RECORD_ONLY: this record cannot be deleted from the renderer.');
     return database.removeRecord(collection, id, projectId);
   });
   ipcMain.handle('formal-bindings:freeze-user-confirmed', (_event, projectId: string, originalStatement: string, formalIr: string, leanSource: string) => formalBindings.freezeUserConfirmed(projectId, originalStatement, formalIr, leanSource));
@@ -174,6 +176,25 @@ function registerIpc(): void {
   ipcMain.handle('agent:pause', (_event, projectId: string) => jobs.pause(projectId));
   ipcMain.handle('agent:stop', (_event, projectId: string) => jobs.stop(projectId));
   ipcMain.handle('agent:jobs', (_event, projectId?: string) => jobs.list(projectId));
+  ipcMain.handle('steering:submit', (_event, projectId: string, input: { rawText: string; type?: import('../src/shared/types').SteeringInstructionType; payload?: Record<string, unknown>; targetBranchId?: string | null }) => {
+    const instruction = steering.submit(projectId, input);
+    if (isUrgentSteering(instruction.type)) {
+      discoveryControllers.get(projectId)?.abort();
+      if (instruction.type === 'PAUSE_RESEARCH') {
+        const current = database.getProject(projectId, false).sessions.at(-1);
+        if (current) database.saveRecord('sessions', steering.applyPending(projectId, current).session);
+        jobs.pause(projectId);
+      }
+      else agent.interruptForSteering(projectId);
+    }
+    if (instruction.type === 'RESUME_RESEARCH') {
+      const current = database.getProject(projectId, false).sessions.at(-1);
+      if (current) database.saveRecord('sessions', steering.applyPending(projectId, current).session);
+      jobs.resume(projectId);
+    }
+    return database.getProject(projectId, false);
+  });
+  ipcMain.handle('steering:explain', (_event, projectId: string, rawText: string) => ({ answer: steering.explain(projectId, rawText), snapshot: database.getProject(projectId, false) }));
   ipcMain.handle('tools:run', async (_event, invocation: ToolInvocation) => {
     const started = new Date().toISOString();
     const bindingId = invocation.name === 'lean_check' && typeof invocation.input.bindingId === 'string' ? invocation.input.bindingId : '';
@@ -267,6 +288,7 @@ app.whenReady().then(async () => {
   tools = new ToolRunner(app.getPath('userData'), () => database.getSettings());
   formalBindings = new FormalBindingService(database);
   discovery = new DiscoveryEngine(database);
+  steering = new ResearchSteeringService(database);
   discovery.recoverInterruptedRuns();
   literature = new LiteratureSearchService(database, undefined, join(app.getPath('userData'), 'literature-full-text'));
   const researchStateLog = new ResearchStateLog(join(app.getPath('userData'), 'logs', 'research-state.jsonl'));

@@ -52,6 +52,12 @@ export class AgentCoordinator {
     this.pause(projectId);
   }
 
+  /** Abort the current safe boundary without changing the persistent job's desired state. */
+  interruptForSteering(projectId: string): void {
+    this.tools.stop(projectId);
+    this.runs.get(projectId)?.controller.abort();
+  }
+
   isRunning(projectId: string): boolean {
     return this.runs.has(projectId);
   }
