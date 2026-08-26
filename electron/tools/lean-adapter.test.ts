@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
-import { resolveLeanRuntime, runLeanVerification, unsoundLeanConstructs } from './lean-adapter';
+import { resolveLeanRuntime, runLeanReplay, runLeanVerification, unsoundLeanConstructs } from './lean-adapter';
 
 const temporary = mkdtempSync(join(tmpdir(), 'mra-lean-test-'));
 const runtime = resolveLeanRuntime('');
@@ -40,4 +40,12 @@ realLean('real Lean 4 kernel adapter', () => {
     const result = await runLeanVerification({ code: 'example : True := by\n  sorry', artifactFile: join(temporary, 'sorry.lean'), userDataPath: temporary, configuredPath: '', timeoutMs: 120_000 });
     expect(result).toMatchObject({ ok: false, errorType: 'UNSOUND_PROOF', verificationStatus: 'REJECTED_UNSOUND' });
   });
+
+  it('obtains a real trace_state through the internal replay channel without weakening strict verification', async () => {
+    const replay = await runLeanReplay({ declaration: 'theorem add_zero_test (n : Nat) : n + 0 = n', tacticHistory: [], artifactFile: join(temporary, 'replay.lean'), userDataPath: temporary, configuredPath: '', timeoutMs: 120_000 });
+    expect(replay, replay.error).toMatchObject({ ok: true, status: 'PROOF_STATE_OBTAINED' });
+    expect(`${replay.stdout}\n${replay.stderr}`).toContain('⊢ n + 0 = n');
+    const strict = await runLeanVerification({ code: 'theorem rejected_placeholder : True := by\n  sorry', artifactFile: join(temporary, 'strict-sorry.lean'), userDataPath: temporary, configuredPath: '', timeoutMs: 120_000 });
+    expect(strict).toMatchObject({ ok: false, errorType: 'UNSOUND_PROOF', verificationStatus: 'REJECTED_UNSOUND' });
+  }, 650_000);
 });

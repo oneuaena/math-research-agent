@@ -23,8 +23,7 @@ export class LeanReplayAdapter {
   }
 
   async replay(projectId: string, bindingId: string, declaration: string, tacticHistory: string[], parentStateId: string | null): Promise<ReplayedProofState | null> {
-    const source = replaySource(declaration, tacticHistory);
-    const result = await this.tools.run({ projectId, name: 'lean_check', purpose: 'Replay an accepted partial Lean proof prefix', input: { bindingId, code: source } });
+    const result = await this.tools.replayLeanProofState({ projectId, declaration, tacticHistory });
     if (!result.ok) return null;
     const rawTrace = outputOf(result); const goals = parseTraceState(rawTrace);
     // A replay with no extracted goal is not a usable partial state.  Closed
@@ -40,19 +39,18 @@ export class LeanReplayAdapter {
   }
 }
 
-function replaySource(declaration: string, tactics: string[]): string {
-  const body = tactics.map((tactic) => `  ${tactic.replace(/\n/g, '\n  ')}`).join('\n');
-  return `${declaration} := by\n${body}${body ? '\n' : ''}  trace_state\n  all_goals sorry`;
-}
-
-function outputOf(result: ToolResult): string { return [result.output, result.stdout, result.stderr, result.error].filter(Boolean).join('\n'); }
+function outputOf(result: { output?: string; stdout?: string; stderr?: string; error?: string }): string { return [result.output, result.stdout, result.stderr, result.error].filter(Boolean).join('\n'); }
 
 /** Parses Lean trace_state output into the context and target that Lean printed. */
 export function parseTraceState(output: string): ReplayGoal[] {
-  const normalized = output.replace(/\r\n/g, '\n'); const marker = normalized.lastIndexOf('⊢');
-  if (marker < 0) return [];
-  const before = normalized.slice(0, marker).split('\n'); const target = normalized.slice(marker + 1).split('\n').find((line) => line.trim())?.trim() ?? '';
-  if (!target) return [];
-  const context = before.slice(Math.max(0, before.lastIndexOf('case ') + 1)).map((line) => line.trim()).filter((line) => line && !line.startsWith('warning:'));
-  return [{ localContext: context, target }];
+  const lines = output.replace(/\r\n/g, '\n').split('\n'); const goals: ReplayGoal[] = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    const marker = lines[index].indexOf('⊢'); if (marker < 0) continue;
+    const target = lines[index].slice(marker + 1).trim(); if (!target) continue;
+    let start = index - 1;
+    while (start >= 0 && !/^\s*case\b/.test(lines[start]) && !lines[start].includes('⊢')) start -= 1;
+    const context = lines.slice(start + 1, index).map((line) => line.trim()).filter((line) => line && !/^case\b/.test(line) && !/^warning:|^declaration uses ['"]sorry/i.test(line));
+    goals.push({ localContext: context, target });
+  }
+  return goals;
 }

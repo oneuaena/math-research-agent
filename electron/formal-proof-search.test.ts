@@ -17,13 +17,14 @@ describe('FormalProofSearchEngine', () => {
     const binding = new FormalBindingService(db).freezeAiProposed(projectId, 'For every natural n, n=n.', '{"target":"n=n"}', 'theorem frozen (n : Nat) : n = n');
     const runTool = vi.fn(async (invocation: { input: { code: string } }) => {
       const code = invocation.input.code;
-      const replay = code.includes('trace_state'); const closed = /\brfl\b/.test(code) && !replay;
-      return { ok: replay || closed, success: replay || closed, output: replay ? 'n : Nat\n⊢ n = n' : 'kernel output', stdout: '', stderr: '', error: closed ? '' : 'unsolved goals', errorType: closed ? 'NONE' as const : 'PROGRAM_ERROR' as const, exitCode: 0, durationMs: 1, timeout: false, verificationStatus: closed ? 'FORMALLY_VERIFIED' as const : 'SUCCESS' as const };
+      const closed = /\brfl\b/.test(code);
+      return { ok: closed, success: closed, output: 'kernel output', stdout: '', stderr: '', error: closed ? '' : 'unsolved goals', errorType: closed ? 'NONE' as const : 'PROGRAM_ERROR' as const, exitCode: 0, durationMs: 1, timeout: false, verificationStatus: closed ? 'FORMALLY_VERIFIED' as const : 'PROGRAM_FAILURE' as const };
     });
-    const result = await new FormalProofSearchEngine(db, { run: runTool } as unknown as ToolRunner).run(projectId, binding.id, ['sorry', 'rfl'], 8);
+    const replay = vi.fn(async () => ({ ok: true, status: 'PROOF_STATE_OBTAINED' as const, output: 'n : Nat\n⊢ n = n', stdout: '', stderr: '', durationMs: 1 }));
+    const result = await new FormalProofSearchEngine(db, { run: runTool, replayLeanProofState: replay } as unknown as ToolRunner).run(projectId, binding.id, ['sorry', 'rfl'], 8);
     expect(result.status).toBe('COMPLETED'); expect(result.attemptedTactics.map((item) => item.script)).toContain('rfl'); expect(result.beam[0].tacticHistory).toEqual(['rfl']); expect(result.beam[0].goals).toEqual([]);
     expect(db.getProject(projectId, false).formalBindings.find((item) => item.id === binding.id)?.status).toBe('KERNEL_CERTIFIED');
-    expect(runTool.mock.calls.every(([call]) => String(call.input.code).includes('theorem frozen (n : Nat) : n = n'))).toBe(true);
+    expect(runTool.mock.calls.every(([call]) => String(call.input.code).includes('theorem frozen (n : Nat) : n = n') && !String(call.input.code).includes('sorry'))).toBe(true); expect(replay).toHaveBeenCalled();
   });
   it('rejects proof escapes before Lean is invoked', () => { expect(validTactic('sorry')).toBe(false); expect(validTactic('run_tac unsafeCast')).toBe(false); expect(validTactic('rfl')).toBe(true); });
 });

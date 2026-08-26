@@ -69,6 +69,17 @@ export function unsoundLeanConstructs(code: string): string[] {
   return checks.filter(([pattern]) => pattern.test(withoutComments)).map(([, label]) => label);
 }
 
+/** A non-certifying result produced only by the internal proof-state replayer. */
+export interface LeanReplayResult {
+  ok: boolean;
+  status: 'PROOF_STATE_OBTAINED' | 'REPLAY_REJECTED' | 'REPLAY_FAILED';
+  output: string;
+  stdout: string;
+  stderr: string;
+  error?: string;
+  durationMs: number;
+}
+
 const LEAN_TOOLCHAIN = 'leanprover/lean4:v4.32.0';
 const MATHLIB_REVISION = 'v4.32.0';
 const mathlibPreparations = new Map<string, Promise<string | null>>();
@@ -279,4 +290,46 @@ export async function runLeanVerification(input: {
   }
   if (execution.exitCode !== 0) return result({ ok: false, output: combined, stdout: execution.stdout, stderr: execution.stderr, error: combined || `Lean exited with code ${execution.exitCode}.`, errorType: 'PROGRAM_ERROR', exitCode: execution.exitCode, workerExitCode: execution.exitCode, durationMs, timeout: false, environment: runtime.displayPath });
   return result({ ok: true, output: combined || 'Lean kernel accepted the proof.', stdout: execution.stdout, stderr: execution.stderr, errorType: 'NONE', exitCode: 0, workerExitCode: 0, durationMs, timeout: false, environment: runtime.displayPath });
+}
+
+/**
+ * Replays a frozen declaration and a previously validated tactic prefix to
+ * inspect Lean's real tactic state.  This is deliberately not a ToolResult:
+ * it has no verification level, cannot be routed through IPC, and cannot be
+ * passed to FormalBindingService.certify.  The sole `sorry` is generated here
+ * after the caller's declaration/prefix have been rejected if unsound.
+ */
+export async function runLeanReplay(input: {
+  declaration: string;
+  tacticHistory: string[];
+  artifactFile: string;
+  userDataPath: string;
+  configuredPath: string;
+  timeoutMs: number;
+  signal?: AbortSignal;
+}): Promise<LeanReplayResult> {
+  const started = performance.now();
+  const rejected = unsoundLeanConstructs(`${input.declaration}\n${input.tacticHistory.join('\n')}`);
+  if (rejected.length || /:=/.test(input.declaration) || !/^\s*(?:theorem|lemma|example)\b/.test(input.declaration)) {
+    return { ok: false, status: 'REPLAY_REJECTED', output: '', stdout: '', stderr: '', error: rejected.length ? `Replay prefix contains forbidden construct(s): ${rejected.join(', ')}.` : 'Replay requires a proof-free theorem, lemma, or example declaration.', durationMs: Math.round(performance.now() - started) };
+  }
+  const code = replaySource(input.declaration, input.tacticHistory);
+  const runtime = resolveLeanRuntime(input.configuredPath);
+  if (!runtime.available || !runtime.lakeExecutable) return { ok: false, status: 'REPLAY_FAILED', output: '', stdout: '', stderr: '', error: runtime.available ? 'MATHLIB_REQUIRES_LAKE: replay requires Lake.' : 'LEAN_UNAVAILABLE: replay requires Lean/Lake.', durationMs: Math.round(performance.now() - started) };
+  const project = join(formalWorkspace(input.userDataPath), 'lean4-project');
+  if (extname(input.artifactFile).toLowerCase() !== '.lean') throw new Error('Lean replay artifact path must use the .lean extension.');
+  writeFileSync(input.artifactFile, code, 'utf8');
+  const mathlibError = await prepareMathlibProject(project, runtime.lakeExecutable, input.timeoutMs, input.signal);
+  if (mathlibError) return { ok: false, status: 'REPLAY_FAILED', output: '', stdout: '', stderr: '', error: mathlibError, durationMs: Math.round(performance.now() - started) };
+  const execution = await runBoundedProcess({ executable: runtime.lakeExecutable, args: ['env', 'lean', input.artifactFile], cwd: project, env: formalEnvironment(project), timeoutMs: input.timeoutMs, maxOutputBytes: 4 * 1024 * 1024, signal: input.signal });
+  const durationMs = Math.round(performance.now() - started); const combined = `${execution.stdout}\n${execution.stderr}`.trim();
+  if (execution.exitCode !== 0 || execution.timedOut || execution.outputLimitExceeded || execution.spawnError) return { ok: false, status: 'REPLAY_FAILED', output: combined, stdout: execution.stdout, stderr: execution.stderr, error: execution.timedOut ? 'Lean replay timed out.' : execution.outputLimitExceeded ? 'Lean replay output exceeded the limit.' : execution.spawnError ? `Lean replay could not start: ${execution.spawnError}` : combined || `Lean replay exited with code ${execution.exitCode}.`, durationMs };
+  return { ok: true, status: 'PROOF_STATE_OBTAINED', output: combined, stdout: execution.stdout, stderr: execution.stderr, durationMs };
+}
+
+function replaySource(declaration: string, tactics: string[]): string {
+  const body = tactics.map((tactic) => `  ${tactic.replace(/\n/g, '\n  ')}`).join('\n');
+  // This terminal placeholder never leaves this module's internal execution
+  // mode.  Strict runLeanVerification continues to reject every `sorry`.
+  return `${declaration.trim()} := by\n${body}${body ? '\n' : ''}  trace_state\n  all_goals sorry`;
 }

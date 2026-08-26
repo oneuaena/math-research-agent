@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { delimiter, dirname, join } from 'node:path';
 import { app } from 'electron';
@@ -7,7 +8,7 @@ import type {
   VerificationToolStatus,
 } from '../src/shared/types';
 import { resolvePythonRuntime } from './python-runtime';
-import { probeLeanVersion, resolveLeanRuntime, runLeanVerification, searchMathlib } from './tools/lean-adapter';
+import { probeLeanVersion, resolveLeanRuntime, runLeanReplay, runLeanVerification, searchMathlib, type LeanReplayResult } from './tools/lean-adapter';
 import { runBoundedProcess, type ProcessExecution } from './tools/process-runner';
 import { downloadWorkspaceFile, projectWorkspace, readWorkspaceFile, writeWorkspaceFile } from './tools/research-workspace';
 import { inputExtension, VerificationAuditLog } from './tools/verification-audit';
@@ -81,6 +82,12 @@ export class ToolRunner {
     private readonly settings: () => { pythonPath: string; leanPath: string; maxToolSeconds: number },
   ) {
     this.audit = new VerificationAuditLog(userDataPath);
+  }
+
+  /** Internal-only proof-state inspection API. It is intentionally absent from ToolInvocation and IPC schemas. */
+  async replayLeanProofState(input: { projectId: string; declaration: string; tacticHistory: string[]; signal?: AbortSignal }): Promise<LeanReplayResult> {
+    const directory = join(this.userDataPath, 'internal-lean-replay', input.projectId); mkdirSync(directory, { recursive: true });
+    return runLeanReplay({ declaration: input.declaration, tacticHistory: input.tacticHistory, artifactFile: join(directory, `${randomUUID()}.lean`), userDataPath: this.userDataPath, configuredPath: this.settings().leanPath, timeoutMs: this.settings().maxToolSeconds * 1000, signal: input.signal });
   }
 
   private runtime() {
