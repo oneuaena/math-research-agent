@@ -1,5 +1,6 @@
 import type { ProjectSnapshot } from '../src/shared/types';
 import { canDisplayVerifiedProof, specificationLevel } from '../src/shared/research';
+import { normalizeMathExpression, normalizeUnicodeMathGlyph, unicodeScript } from './latex-unicode';
 
 const section = (title: string, content: string) => `## ${title}\n\n${content.trim() || '—'}\n`;
 
@@ -21,12 +22,56 @@ export function buildMarkdownReport(snapshot: ProjectSnapshot): string {
 }
 
 type Inline = { type: 'text' | 'math' | 'code' | 'bold' | 'italic'; value: string };
-const MATH_UNICODE: Array<[string, string]> = [['α', '\\alpha'], ['β', '\\beta'], ['γ', '\\gamma'], ['θ', '\\theta'], ['λ', '\\lambda'], ['μ', '\\mu'], ['π', '\\pi'], ['Σ', '\\Sigma'], ['∞', '\\infty'], ['≤', '\\le'], ['≥', '\\ge'], ['≠', '\\ne'], ['≈', '\\approx'], ['→', '\\to'], ['⇒', '\\Rightarrow'], ['⇔', '\\Leftrightarrow'], ['∈', '\\in'], ['∉', '\\notin'], ['⊂', '\\subset'], ['⊆', '\\subseteq'], ['∩', '\\cap'], ['∪', '\\cup'], ['∀', '\\forall'], ['∃', '\\exists'], ['∇', '\\nabla'], ['∂', '\\partial'], ['±', '\\pm'], ['×', '\\times'], ['·', '\\cdot'], ['ℝ', '\\mathbb{R}'], ['ℕ', '\\mathbb{N}'], ['ℤ', '\\mathbb{Z}']];
-function escapeLatexText(value: string): string { const escaped = value.replace(/\\/g, '\\textbackslash{}').replace(/([%&#_${}])/g, '\\$1').replace(/~/g, '\\textasciitilde{}').replace(/\^/g, '\\textasciicircum{}'); return MATH_UNICODE.reduce((current, [symbol, latex]) => current.split(symbol).join(`\\ensuremath{${latex}}`), escaped); }
-function validMath(value: string): boolean { let braces = 0; for (let i = 0; i < value.length; i += 1) { if (value[i] === '\\') { i += 1; continue; } if (value[i] === '{') braces += 1; if (value[i] === '}' && --braces < 0) return false; } return braces === 0 && !value.includes('\0'); }
-function math(value: string): string { return MATH_UNICODE.reduce((current, [symbol, latex]) => current.split(symbol).join(latex), value.trim()); }
+
+function escapeLatexText(value: string): string {
+  return value.replace(/\\/g, '\\textbackslash{}').replace(/([%&#_${}])/g, '\\$1').replace(/~/g, '\\textasciitilde{}').replace(/\^/g, '\\textasciicircum{}');
+}
+
+/** Reject document-level commands but otherwise leave user-authored formula syntax intact. */
+function validMath(value: string): boolean {
+  let braces = 0;
+  for (let index = 0; index < value.length; index += 1) {
+    if (value[index] === '\\') { index += 1; continue; }
+    if (value[index] === '{') braces += 1;
+    if (value[index] === '}' && --braces < 0) return false;
+  }
+  return braces === 0 && !value.includes('\0') && !/\\(?:input|include|write|openout|read|usepackage|documentclass|begin\s*\{document\}|end\s*\{document\})\b/i.test(value);
+}
+
+function serializeText(value: string): string {
+  let output = '';
+  let text = '';
+  const flushText = () => { if (text) output += escapeLatexText(text); text = ''; };
+  const characters = Array.from(value);
+  for (let index = 0; index < characters.length; index += 1) {
+    const character = characters[index];
+    const simpleMath = characters.slice(index).join('').match(/^[A-Za-z](?:(?:_(?:\{[A-Za-z0-9+\- ]+\}|[A-Za-z0-9]))|(?:\^(?:\{[A-Za-z0-9+\- ]+\}|[A-Za-z0-9]))){1,2}/);
+    if (simpleMath && !(index > 0 && /[A-Za-z0-9]/.test(characters[index - 1])) && !/^[A-Za-z0-9_]/.test(characters[index + simpleMath[0].length] ?? '')) {
+      flushText(); output += `$${simpleMath[0]}$`; index += simpleMath[0].length - 1; continue;
+    }
+    const latex = normalizeUnicodeMathGlyph(character);
+    if (latex) {
+      let scripts = '';
+      while (index + 1 < characters.length && (Object.hasOwn(unicodeScript.SUPER, characters[index + 1]) || Object.hasOwn(unicodeScript.SUB, characters[index + 1]))) scripts += characters[++index];
+      flushText(); output += `$${latex}${normalizeMathExpression(scripts)}$`; continue;
+    }
+    if (Object.hasOwn(unicodeScript.SUPER, character) || Object.hasOwn(unicodeScript.SUB, character)) {
+      let scripts = character;
+      while (index + 1 < characters.length && (Object.hasOwn(unicodeScript.SUPER, characters[index + 1]) || Object.hasOwn(unicodeScript.SUB, characters[index + 1]))) scripts += characters[++index];
+      const base = text.at(-1);
+      if (base && /[A-Za-z0-9]/.test(base)) { text = text.slice(0, -1); flushText(); output += `$${base}${normalizeMathExpression(scripts)}$`; }
+      else { flushText(); output += `\\textsuperscript{${escapeLatexText(normalizeMathExpression(scripts).replace(/[{}_]/g, ''))}}`; }
+      continue;
+    }
+    text += character;
+  }
+  flushText();
+  return output;
+}
+
+function math(value: string): string { return normalizeMathExpression(value); }
 function parseInline(value: string): Inline[] { const nodes: Inline[] = []; let cursor = 0; const add = (type: Inline['type'], text: string) => { if (text) nodes.push({ type, value: text }); }; while (cursor < value.length) { const rest = value.slice(cursor); const match = rest.match(/^(\$([^$\n]+)\$|\\\((.*?)\\\)|`([^`]+)`|\*\*([\s\S]+?)\*\*|\*([^*\n]+)\*)/); if (!match) { const next = rest.search(/\$|\\\(|`|\*/); if (next < 0) { add('text', rest); break; } add('text', rest.slice(0, next)); cursor += next; continue; } const raw = match[0]; const type: Inline['type'] = raw.startsWith('$') || raw.startsWith('\\(') ? 'math' : raw.startsWith('`') ? 'code' : raw.startsWith('**') ? 'bold' : 'italic'; add(type, type === 'math' ? (match[2] ?? match[3] ?? '') : match[4] ?? match[5] ?? match[6] ?? ''); cursor += raw.length; } return nodes; }
-function serializeInline(value: string): string { return parseInline(value).map((node) => node.type === 'math' ? validMath(node.value) ? `$${math(node.value)}$` : `\\texttt{${escapeLatexText(node.value)}}` : node.type === 'code' ? `\\texttt{${escapeLatexText(node.value)}}` : node.type === 'bold' ? `\\textbf{${serializeInline(node.value)}}` : node.type === 'italic' ? `\\emph{${serializeInline(node.value)}}` : escapeLatexText(node.value)).join(''); }
+function serializeInline(value: string): string { return parseInline(value).map((node) => node.type === 'math' ? validMath(node.value) ? `$${math(node.value)}$` : `\\texttt{${escapeLatexText(node.value)}}` : node.type === 'code' ? `\\texttt{${escapeLatexText(node.value)}}` : node.type === 'bold' ? `\\textbf{${serializeInline(node.value)}}` : node.type === 'italic' ? `\\emph{${serializeInline(node.value)}}` : serializeText(node.value)).join(''); }
 
 /** Deterministic Markdown-to-LaTeX serializer with separate text, math, and code paths. */
 export function markdownToLatex(markdown: string): { body: string; warnings: string[] } {
@@ -41,7 +86,14 @@ export function markdownToLatex(markdown: string): { body: string; warnings: str
   } return { body: output.join('\n\n'), warnings };
 }
 
+export function buildLatexDocument(title: string, markdown: string): { tex: string; warnings: string[] } {
+  const converted = markdownToLatex(markdown); const warningComment = converted.warnings.map((warning) => `% ${warning}`).join('\n');
+  return {
+    warnings: converted.warnings,
+    tex: `% Recommended compiler: XeLaTeX\n% UTF-8 research report; formulas are serialized separately from text.\n\\documentclass[UTF8,11pt]{ctexart}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{amsmath,amssymb,amsthm,mathtools,bm,booktabs,longtable,array,enumitem,xcolor}\n\\usepackage{listings}\n\\usepackage{hyperref}\n\\hypersetup{unicode=true,colorlinks=true,linkcolor=blue,urlcolor=blue}\n\\lstset{basicstyle=\\ttfamily\\small,breaklines=true,columns=fullflexible}\n\\title{${serializeInline(title)}}\n\\begin{document}\n\\maketitle\n${warningComment}\n${converted.body}\n\\end{document}\n`,
+  };
+}
+
 export function buildLatexReport(snapshot: ProjectSnapshot): string {
-  const converted = markdownToLatex(buildMarkdownReport(snapshot)); const warningComment = converted.warnings.map((warning) => `% ${warning}`).join('\n');
-  return `% Recommended compiler: XeLaTeX\n% UTF-8 research report; formulas are serialized separately from text.\n\\documentclass[UTF8,11pt]{ctexart}\n\\usepackage[margin=1in]{geometry}\n\\usepackage{amsmath,amssymb,amsthm,mathtools,bm,booktabs,longtable,array,enumitem,xcolor}\n\\usepackage{listings}\n\\usepackage{hyperref}\n\\hypersetup{unicode=true,colorlinks=true,linkcolor=blue,urlcolor=blue}\n\\lstset{basicstyle=\\ttfamily\\small,breaklines=true,columns=fullflexible}\n\\title{${escapeLatexText(snapshot.project.name)}}\n\\begin{document}\n\\maketitle\n${warningComment}\n${converted.body}\n\\end{document}\n`;
+  return buildLatexDocument(snapshot.project.name, buildMarkdownReport(snapshot)).tex;
 }
