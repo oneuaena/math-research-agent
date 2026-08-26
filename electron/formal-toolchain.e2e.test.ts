@@ -71,7 +71,7 @@ realFormalToolchain('Agent formal verification toolchain', () => {
     };
 
     try {
-      db.saveSettings({ ...db.getSettings(), provider: 'local', maxIterations: 40, maxResearchMinutes: 5, checkpointEvery: 100 });
+      db.saveSettings({ ...db.getSettings(), provider: 'local', maxIterations: 40, maxToolSeconds: 120, maxResearchMinutes: 5, checkpointEvery: 100 });
       const snapshot = db.createProject({ name: 'Formal toolchain fixture', question: theorem, goal: 'Verify a simple theorem with distinct evidence levels.', background: '', knownResults: '', constraints: '', mode: 'autonomous', variables: 'n', domain: 'Nat' });
       const orchestrator = new ResearchOrchestrator(db, tools, provider, () => undefined);
       await orchestrator.run(snapshot.project.id, new AbortController().signal);
@@ -85,6 +85,7 @@ realFormalToolchain('Agent formal verification toolchain', () => {
       expect(completed.evidence.some((item) => item.verificationLevel === 'UNSAT')).toBe(true);
       expect(completed.evidence.some((item) => item.verificationLevel === 'FORMALLY_VERIFIED')).toBe(true);
       expect(completed.formalBindings).toEqual(expect.arrayContaining([expect.objectContaining({ status: 'KERNEL_CERTIFIED', equivalenceStatus: 'NOT_INDEPENDENTLY_CERTIFIED' })]));
+      expect(completed.resourceBudgets.at(-1)).toMatchObject({ status: 'ACTIVE', limits: { maxToolSeconds: 900 } });
       expect(completed.proofs.at(-1)).toMatchObject({ theorem, status: 'CANDIDATE', verificationStatus: 'llm-assessed-only', independentlyReviewed: true });
 
       const auditPath = join(directory, 'logs', 'verification-audit.jsonl');
